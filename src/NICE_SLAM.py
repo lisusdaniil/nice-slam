@@ -205,7 +205,7 @@ class NICE_SLAM():
         self.fine_grid_len = fine_grid_len
         color_grid_len = cfg['grid_len']['color']
         self.color_grid_len = color_grid_len
-
+        
         c = {}
         c_dim = cfg['model']['c_dim']
         xyz_len = self.bound[:, 1]-self.bound[:, 0]
@@ -246,6 +246,18 @@ class NICE_SLAM():
         val_shape = [1, c_dim, *color_val_shape]
         color_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)
         c[color_key] = color_val
+
+        # Background sphere (color only) - in degrees
+        if self.args.bg_sphr:
+            sphere_key = 'grid_sphere'
+            sphere_grid_len = cfg['grid_len']['sphere']
+            self.sphere_grid_len = sphere_grid_len
+            self.sphere_len = np.array([360, 180])
+            sphere_val_shape = list(map(int, (self.sphere_len/sphere_grid_len).tolist()))
+            self.sphere_val_shape = sphere_val_shape
+            val_shape = [1, c_dim, *sphere_val_shape]
+            sphere_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)
+            c[sphere_key] = sphere_val
 
         self.shared_c = c
 

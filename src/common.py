@@ -207,6 +207,7 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, device='cuda:0'
 
     Args:
         raw (tensor, N_rays*N_samples*4): prediction from model.
+        *** need to add input for background. ***
         z_vals (tensor, N_rays*N_samples): integration time.
         rays_d (tensor, N_rays*3): direction of each ray.
         occupancy (bool, optional): occupancy or volume density. Defaults to False.
@@ -235,10 +236,11 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, device='cuda:0'
     else:
         # original nerf, volume density
         alpha = raw2alpha(raw[..., -1], dists)  # (N_rays, N_samples)
-
+    
     weights = alpha.float() * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).to(
         device).float(), (1.-alpha + 1e-10).float()], -1).float(), -1)[:, :-1]
     rgb_map = torch.sum(weights[..., None] * rgb, -2)  # (N_rays, 3)
+    # ADD SPHERICAL BACKGROUND HERE +(1-weight)*rgb_bgd
     depth_map = torch.sum(weights * z_vals, -1)  # (N_rays)
     tmp = (z_vals-depth_map.unsqueeze(-1))  # (N_rays, N_samples)
     depth_var = torch.sum(weights*tmp*tmp, dim=1)  # (N_rays)

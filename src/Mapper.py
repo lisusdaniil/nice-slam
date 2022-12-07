@@ -12,6 +12,7 @@ from src.common import (get_camera_from_tensor, get_samples,
 from src.utils.datasets import get_dataset
 from src.utils.Visualizer import Visualizer
 
+import matplotlib.pyplot as plt
 
 class Mapper(object):
     """
@@ -78,6 +79,8 @@ class Mapper(object):
         if self.nice:
             if coarse_mapper:
                 self.keyframe_selection_method = 'global'
+        if self.args.bg_sphr:
+            self.sphere_len = slam.sphere_len
 
         self.keyframe_dict = []
         self.keyframe_list = []
@@ -104,63 +107,119 @@ class Mapper(object):
             mask (tensor): mask for selected optimizable feature.
             points (tensor): corresponding point coordinates.
         """
+        # Builds mask for voxel grid
+        # Load pixel values
         H, W, fx, fy, cx, cy, = self.H, self.W, self.fx, self.fy, self.cx, self.cy
-        X, Y, Z = torch.meshgrid(torch.linspace(self.bound[0][0], self.bound[0][1], val_shape[2]),
-                                 torch.linspace(self.bound[1][0], self.bound[1][1], val_shape[1]),
-                                 torch.linspace(self.bound[2][0], self.bound[2][1], val_shape[0]))
+        if not key == 'grid_sphere': 
+            # Create mesh 
+            X, Y, Z = torch.meshgrid(torch.linspace(self.bound[0][0], self.bound[0][1], val_shape[2]),
+                                    torch.linspace(self.bound[1][0], self.bound[1][1], val_shape[1]),
+                                    torch.linspace(self.bound[2][0], self.bound[2][1], val_shape[0]))
+        
+            # generate an array of points
+            points = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3)
+            # If coarse grid then return all ones
+            if key == 'grid_coarse':
+                mask = np.ones(val_shape[::-1]).astype(np.bool)
+                return mask
+            # backup points
+            points_bak = points.clone()
+            # get world to camera transform on cpu
+            c2w = c2w.cpu().numpy()
+            w2c = np.linalg.inv(c2w)
 
-        points = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3)
-        if key == 'grid_coarse':
-            mask = np.ones(val_shape[::-1]).astype(np.bool)
-            return mask
-        points_bak = points.clone()
-        c2w = c2w.cpu().numpy()
-        w2c = np.linalg.inv(c2w)
-        ones = np.ones_like(points[:, 0]).reshape(-1, 1)
-        homo_vertices = np.concatenate(
-            [points, ones], axis=1).reshape(-1, 4, 1)
-        cam_cord_homo = w2c@homo_vertices
-        cam_cord = cam_cord_homo[:, :3]
-        K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
-        cam_cord[:, 0] *= -1
-        uv = K@cam_cord
-        z = uv[:, -1:]+1e-5
-        uv = uv[:, :2]/z
-        uv = uv.astype(np.float32)
+            ones = np.ones_like(points[:, 0]).reshape(-1, 1)
+            # get points in homog form
+            homo_vertices = np.concatenate(
+                [points, ones], axis=1).reshape(-1, 4, 1)
+            # map vertices into camera frame
+            cam_cord_homo = w2c@homo_vertices
+            cam_cord = cam_cord_homo[:, :3]
+            K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
+            # Flip x-axis and get pixel coords of points in grid
+            cam_cord[:, 0] *= -1
+            uv = K@cam_cord
+            z = uv[:, -1:]+1e-5
+            uv = uv[:, :2]/z
+            uv = uv.astype(np.float32)
+            # compute depths in camera frame
+            remap_chunk = int(3e4)
+            depths = []
+            for i in range(0, uv.shape[0], remap_chunk):
+                depths += [cv2.remap(depth_np,
+                                    uv[i:i+remap_chunk, 0],
+                                    uv[i:i+remap_chunk, 1],
+                                    interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
+            depths = np.concatenate(depths, axis=0)
+            # mask based on width and height of camera frame (frustrum)
+            edge = 0
+            mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
+                (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
 
-        remap_chunk = int(3e4)
-        depths = []
-        for i in range(0, uv.shape[0], remap_chunk):
-            depths += [cv2.remap(depth_np,
-                                 uv[i:i+remap_chunk, 0],
-                                 uv[i:i+remap_chunk, 1],
-                                 interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
-        depths = np.concatenate(depths, axis=0)
+            # For ray with depth==0, fill it with maximum depth
+            zero_mask = (depths == 0)
+            depths[zero_mask] = np.max(depths)
 
-        edge = 0
-        mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
-            (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
+            # depth test
+            mask = mask & (0 <= -z[:, :, 0]) & (-z[:, :, 0] <= depths+0.5)
+            mask = mask.reshape(-1)
 
-        # For ray with depth==0, fill it with maximum depth
-        zero_mask = (depths == 0)
-        depths[zero_mask] = np.max(depths)
+            # add feature grid near cam center
+            ray_o = c2w[:3, 3]
+            ray_o = torch.from_numpy(ray_o).unsqueeze(0)
+            # Generate second mask based on radius of 0.5 m
+            dist = points_bak-ray_o
+            dist = torch.sum(dist*dist, axis=1)
+            mask2 = dist < 0.5*0.5
+            mask2 = mask2.cpu().numpy()
+            mask = mask | mask2
 
-        # depth test
-        mask = mask & (0 <= -z[:, :, 0]) & (-z[:, :, 0] <= depths+0.5)
-        mask = mask.reshape(-1)
+            points = points[mask]
+            mask = mask.reshape(val_shape[2], val_shape[1], val_shape[0])
+        else: # Background sphere mask
+            # Get azimuth and polar angle and radius
+            PHI, THET = torch.meshgrid(torch.linspace(0,self.sphere_len[0],val_shape[0]),
+                                      torch.linspace(0,self.sphere_len[1],val_shape[1]))
+            rho = 50 # making this large just in case (should be able to use 1)
+            # Convert to cartesian
+            X = rho*torch.sin(PHI)*torch.cos(THET)
+            Y = rho*torch.sin(PHI)*torch.sin(THET)
+            Z = rho*torch.cos(PHI)
+            # generate an array of points
+            points = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3, 1) # Not sure about this 1 at the end
+            # backup points
+            points_bak = points.clone()
+            # get world to camera transform on cpu
+            c2w = c2w.cpu().numpy()
+            w2c = np.linalg.inv(c2w)
+            C_cw = w2c[:3,:3]
+            # map vertices into camera frame
+            cam_cord = C_cw @ np.array(points)
+            K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
+            # Flip x-axis and get pixel coords of points in grid
+            cam_cord[:, 0] *= -1
+            uv = K@cam_cord
+            z = uv[:, -1:]+1e-5
+            uv = uv[:, :2]/z
+            uv = uv.astype(np.float32)
+            # compute depths in camera frame
+            remap_chunk = int(3e4)
+            depths = []
+            for i in range(0, uv.shape[0], remap_chunk):
+                depths += [cv2.remap(depth_np,
+                                    uv[i:i+remap_chunk, 0],
+                                    uv[i:i+remap_chunk, 1],
+                                    interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
+            depths = np.concatenate(depths, axis=0)
+            # mask based on width and height of camera frame (frustrum)
+            edge = 0
+            mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
+                (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
 
-        # add feature grid near cam center
-        ray_o = c2w[:3, 3]
-        ray_o = torch.from_numpy(ray_o).unsqueeze(0)
-
-        dist = points_bak-ray_o
-        dist = torch.sum(dist*dist, axis=1)
-        mask2 = dist < 0.5*0.5
-        mask2 = mask2.cpu().numpy()
-        mask = mask | mask2
-
-        points = points[mask]
-        mask = mask.reshape(val_shape[2], val_shape[1], val_shape[0])
+            # Just get positive depths
+            mask = mask & (0 <= -z[:, :, 0])
+            mask = mask.reshape(val_shape[0], val_shape[1])
+            
         return mask
 
     def keyframe_selection_overlap(self, gt_color, gt_depth, c2w, keyframe_dict, k, N_samples=16, pixels=100):
@@ -181,10 +240,10 @@ class Mapper(object):
         """
         device = self.device
         H, W, fx, fy, cx, cy = self.H, self.W, self.fx, self.fy, self.cx, self.cy
-
+        # Get sample rays
         rays_o, rays_d, gt_depth, gt_color = get_samples(
             0, H, 0, W, pixels, H, W, fx, fy, cx, cy, c2w, gt_depth, gt_color, self.device)
-
+        
         gt_depth = gt_depth.reshape(-1, 1)
         gt_depth = gt_depth.repeat(1, N_samples)
         t_vals = torch.linspace(0., 1., steps=N_samples).to(device)
@@ -287,17 +346,19 @@ class Mapper(object):
             self.selected_keyframes[idx] = keyframes_info
 
         pixs_per_image = self.mapping_pixels//len(optimize_frame)
-
+        # initilize parameter list for optimization
         decoders_para_list = []
         coarse_grid_para = []
         middle_grid_para = []
         fine_grid_para = []
         color_grid_para = []
+        sphere_grid_para = []
         gt_depth_np = cur_gt_depth.cpu().numpy()
         if self.nice:
             if self.frustum_feature_selection:
                 masked_c_grad = {}
                 mask_c2w = cur_c2w
+            # Go through list of Nerfs and add grid points to list of variables to optimize
             for key, val in c.items():
                 if not self.frustum_feature_selection:
                     val = Variable(val.to(device), requires_grad=True)
@@ -310,12 +371,16 @@ class Mapper(object):
                         fine_grid_para.append(val)
                     elif key == 'grid_color':
                         color_grid_para.append(val)
+                    elif key == 'grid_sphere':
+                        sphere_grid_para.append(val)
 
                 else:
+                    # get the mask for the current frame to find which parameters to optimize
                     mask = self.get_mask_from_c2w(
                         mask_c2w, key, val.shape[2:], gt_depth_np)
-                    mask = torch.from_numpy(mask).permute(2, 1, 0).unsqueeze(
-                        0).unsqueeze(0).repeat(1, val.shape[1], 1, 1, 1)
+                    if not key == 'grid_sphere':
+                        mask = torch.from_numpy(mask).permute(2, 1, 0).unsqueeze(
+                            0).unsqueeze(0).repeat(1, val.shape[1], 1, 1, 1)
                     val = val.to(device)
                     # val_grad is the optimizable part, other parameters will be fixed
                     val_grad = val[mask].clone()
@@ -331,8 +396,11 @@ class Mapper(object):
                         fine_grid_para.append(val_grad)
                     elif key == 'grid_color':
                         color_grid_para.append(val_grad)
+                    elif key == 'grid_sphere':
+                        sphere_grid_para.append(val_grad)
 
         if self.nice:
+            # Add decoder parameters if we want to tune the decoders
             if not self.fix_fine:
                 decoders_para_list += list(
                     self.decoders.fine_decoder.parameters())
@@ -343,9 +411,11 @@ class Mapper(object):
             # imap*, single MLP
             decoders_para_list += list(self.decoders.parameters())
 
+        # generate a list of camera pose tensors to optimize
         if self.BA:
             camera_tensor_list = []
             gt_camera_tensor_list = []
+            
             for frame in optimize_frame:
                 # the oldest frame should be fixed to avoid drifting
                 if frame != oldest_frame:
@@ -370,13 +440,15 @@ class Mapper(object):
                                               {'params': middle_grid_para, 'lr': 0},
                                               {'params': fine_grid_para, 'lr': 0},
                                               {'params': color_grid_para, 'lr': 0},
+                                              {'params': sphere_grid_para, 'lr': 0},
                                               {'params': camera_tensor_list, 'lr': 0}])
             else:
                 optimizer = torch.optim.Adam([{'params': decoders_para_list, 'lr': 0},
                                               {'params': coarse_grid_para, 'lr': 0},
                                               {'params': middle_grid_para, 'lr': 0},
                                               {'params': fine_grid_para, 'lr': 0},
-                                              {'params': color_grid_para, 'lr': 0}])
+                                              {'params': color_grid_para, 'lr': 0},
+                                              {'params': sphere_grid_para, 'lr': 0}])
         else:
             # imap*, single MLP
             if self.BA:
@@ -387,10 +459,11 @@ class Mapper(object):
                     [{'params': decoders_para_list, 'lr': 0}])
             from torch.optim.lr_scheduler import StepLR
             scheduler = StepLR(optimizer, step_size=200, gamma=0.8)
-
+        # loop through the iterations of optimization, see different stages below
         for joint_iter in range(num_joint_iters):
             if self.nice:
                 if self.frustum_feature_selection:
+                    # This part inserts tunables into voxel grids for optim
                     for key, val in c.items():
                         if (self.coarse_mapper and 'coarse' in key) or \
                                 ((not self.coarse_mapper) and ('coarse' not in key)):
@@ -408,15 +481,16 @@ class Mapper(object):
                     self.stage = 'fine'
                 else:
                     self.stage = 'color'
-
+                # get learning rates for each group
                 optimizer.param_groups[0]['lr'] = cfg['mapping']['stage'][self.stage]['decoders_lr']*lr_factor
                 optimizer.param_groups[1]['lr'] = cfg['mapping']['stage'][self.stage]['coarse_lr']*lr_factor
                 optimizer.param_groups[2]['lr'] = cfg['mapping']['stage'][self.stage]['middle_lr']*lr_factor
                 optimizer.param_groups[3]['lr'] = cfg['mapping']['stage'][self.stage]['fine_lr']*lr_factor
                 optimizer.param_groups[4]['lr'] = cfg['mapping']['stage'][self.stage]['color_lr']*lr_factor
+                optimizer.param_groups[5]['lr'] = cfg['mapping']['stage'][self.stage]['sphere_lr']*lr_factor
                 if self.BA:
                     if self.stage == 'color':
-                        optimizer.param_groups[5]['lr'] = self.BA_cam_lr
+                        optimizer.param_groups[6]['lr'] = self.BA_cam_lr
             else:
                 self.stage = 'color'
                 optimizer.param_groups[0]['lr'] = cfg['mapping']['imap_decoders_lr']
@@ -426,8 +500,9 @@ class Mapper(object):
             if (not (idx == 0 and self.no_vis_on_first_frame)) and ('Demo' not in self.output):
                 self.visualizer.vis(
                     idx, joint_iter, cur_gt_depth, cur_gt_color, cur_c2w, self.c, self.decoders)
-
+            # Reset gradient
             optimizer.zero_grad()
+
             batch_rays_d_list = []
             batch_rays_o_list = []
             batch_gt_depth_list = []
@@ -453,14 +528,15 @@ class Mapper(object):
                         c2w = get_camera_from_tensor(camera_tensor)
                     else:
                         c2w = cur_c2w
-
+                # Subsample images and generate corresponding rays 
                 batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(
                     0, H, 0, W, pixs_per_image, H, W, fx, fy, cx, cy, c2w, gt_depth, gt_color, self.device)
+                # add to list
                 batch_rays_o_list.append(batch_rays_o.float())
                 batch_rays_d_list.append(batch_rays_d.float())
                 batch_gt_depth_list.append(batch_gt_depth.float())
                 batch_gt_color_list.append(batch_gt_color.float())
-
+            # Concatenate all rays and images into one big list
             batch_rays_d = torch.cat(batch_rays_d_list)
             batch_rays_o = torch.cat(batch_rays_o_list)
             batch_gt_depth = torch.cat(batch_gt_depth_list)
@@ -469,6 +545,7 @@ class Mapper(object):
             if self.nice:
                 # should pre-filter those out of bounding box depth value
                 with torch.no_grad():
+                    # detach rays and find which ones are inside of the bounding box.
                     det_rays_o = batch_rays_o.clone().detach().unsqueeze(-1)  # (N, 3, 1)
                     det_rays_d = batch_rays_d.clone().detach().unsqueeze(-1)  # (N, 3, 1)
                     t = (self.bound.unsqueeze(0).to(
@@ -479,18 +556,19 @@ class Mapper(object):
                 batch_rays_o = batch_rays_o[inside_mask]
                 batch_gt_depth = batch_gt_depth[inside_mask]
                 batch_gt_color = batch_gt_color[inside_mask]
+            # Render the pixels using the rays and unpack
             ret = self.renderer.render_batch_ray(c, self.decoders, batch_rays_d,
                                                  batch_rays_o, device, self.stage,
                                                  gt_depth=None if self.coarse_mapper else batch_gt_depth)
             depth, uncertainty, color = ret
-
+            # Mask out negative depths
             depth_mask = (batch_gt_depth > 0)
-
+            # Construct depth losses
             if self.args.dep_u:
                 loss = torch.div(torch.abs(batch_gt_depth[depth_mask]-depth[depth_mask]), batch_gt_depth[depth_mask]*(0.0029)).sum()
             else:
                 loss = torch.abs(batch_gt_depth[depth_mask]-depth[depth_mask]).sum()
-
+            # Construct color losses
             if ((not self.nice) or (self.stage == 'color')):
                 color_loss = torch.abs(batch_gt_color - color).sum()
                 weighted_color_loss = self.w_color_loss*color_loss
@@ -503,8 +581,9 @@ class Mapper(object):
                     c, self.decoders, batch_rays_d, batch_rays_o, batch_gt_depth, device, self.stage)
                 regulation_loss = torch.abs(point_sigma).sum()
                 loss += 0.0005*regulation_loss
-
+            # run back-propagation to get gradients
             loss.backward(retain_graph=False)
+            # run optimizer one step
             optimizer.step()
             if not self.nice:
                 # for imap*
