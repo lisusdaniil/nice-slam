@@ -48,6 +48,9 @@ class Renderer(object):
             pi = pi.unsqueeze(0)
             if self.nice:
                 ret = decoders(pi, c_grid=c, stage=stage)
+                if 'grid_sphere' in c:
+                    # Get background sphere outputs 
+                    pass
             else:
                 ret = decoders(pi, c_grid=None)
             ret = ret.squeeze(0)
@@ -94,7 +97,7 @@ class Renderer(object):
             gt_depth = gt_depth.reshape(-1, 1)
             gt_depth_samples = gt_depth.repeat(1, N_samples)
             near = gt_depth_samples*0.01
-
+        
         with torch.no_grad():
             det_rays_o = rays_o.clone().detach().unsqueeze(-1)  # (N, 3, 1)
             det_rays_d = rays_d.clone().detach().unsqueeze(-1)  # (N, 3, 1)
@@ -174,15 +177,37 @@ class Renderer(object):
             z_vals, _ = torch.sort(
                 torch.cat([z_vals, z_vals_surface.double()], -1), -1)
 
+        # Generate sets of points for each ray by multiplying ray direction by sample depths
         pts = rays_o[..., None, :] + rays_d[..., None, :] * \
             z_vals[..., :, None]  # [N_rays, N_samples+N_surface, 3]
         pointsf = pts.reshape(-1, 3)
 
+        # evaluate points using networks
         raw = self.eval_points(pointsf, decoders, c, stage, device)
         raw = raw.reshape(N_rays, N_samples+N_surface, -1)
-
+        
+        # if using background sphere, evaluate ray points
+        # Note: here we are temporarily hijacking the color grid inputs to update 
+        # the sphere grid voxels (actually pixels)
+        if 'grid_sphere' in c.keys():
+            # Make copy of vars
+            c_bg = c.clone()
+            # Replace color grid
+            c_bg['grid_color'] = c['grid_sphere']
+            # Generate points from ray directions
+            polar = torch.arccos(rays_d[:,2])
+            azim = torch.sign(rays_d[:,1]) * torch.arccos(rays_d[:,0] /
+                            torch.linalg.vector_norm(rays_d[:,:2],dim=1) ) 
+            pointsf = torch.cat([polar, azim, torch.ones_like(azim)],dim=-1)
+            # evaluate points using networks
+            raw_bg = self.eval_points(pointsf, decoders, c_bg, stage, device)
+            raw_bg = raw_bg.reshape(N_rays, N_samples+N_surface, -1)
+        else:
+            raw_bg = None
+            
         depth, uncertainty, color, weights = raw2outputs_nerf_color(
             raw, z_vals, rays_d, occupancy=self.occupancy, device=device)
+        
         if N_importance > 0:
             z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
             z_samples = sample_pdf(

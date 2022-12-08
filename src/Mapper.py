@@ -110,115 +110,117 @@ class Mapper(object):
         # Builds mask for voxel grid
         # Load pixel values
         H, W, fx, fy, cx, cy, = self.H, self.W, self.fx, self.fy, self.cx, self.cy
-        if not key == 'grid_sphere': 
-            # Create mesh 
-            X, Y, Z = torch.meshgrid(torch.linspace(self.bound[0][0], self.bound[0][1], val_shape[2]),
-                                    torch.linspace(self.bound[1][0], self.bound[1][1], val_shape[1]),
-                                    torch.linspace(self.bound[2][0], self.bound[2][1], val_shape[0]))
+         
+        # Create mesh 
+        X, Y, Z = torch.meshgrid(torch.linspace(self.bound[0][0], self.bound[0][1], val_shape[2]),
+                                torch.linspace(self.bound[1][0], self.bound[1][1], val_shape[1]),
+                                torch.linspace(self.bound[2][0], self.bound[2][1], val_shape[0]))
+    
+        # generate an array of points
+        points = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3)
+        # If coarse grid then return all ones (tune regardless of depth)
+        if key == 'grid_coarse' or key == 'grid_sphere':
+            mask = np.ones(val_shape[::-1]).astype(np.bool)
+            return mask
+        # backup points
+        points_bak = points.clone()
+        # get world to camera transform on cpu
+        c2w = c2w.cpu().numpy()
+        w2c = np.linalg.inv(c2w)
+
+        ones = np.ones_like(points[:, 0]).reshape(-1, 1)
+        # get points in homog form
+        homo_vertices = np.concatenate(
+            [points, ones], axis=1).reshape(-1, 4, 1)
+        # map vertices into camera frame
+        cam_cord_homo = w2c@homo_vertices
+        cam_cord = cam_cord_homo[:, :3]
+        K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
+        # Flip x-axis and get pixel coords of points in grid
+        cam_cord[:, 0] *= -1
+        uv = K@cam_cord
+        z = uv[:, -1:]+1e-5
+        uv = uv[:, :2]/z
+        uv = uv.astype(np.float32)
+        # compute depths in camera frame
+        remap_chunk = int(3e4)
+        depths = []
+        for i in range(0, uv.shape[0], remap_chunk):
+            depths += [cv2.remap(depth_np,
+                                uv[i:i+remap_chunk, 0],
+                                uv[i:i+remap_chunk, 1],
+                                interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
+        depths = np.concatenate(depths, axis=0)
+        # mask based on width and height of camera frame (frustrum)
+        edge = 0
+        mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
+            (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
+
+        # For ray with depth==0, fill it with maximum depth
+        zero_mask = (depths == 0)
+        depths[zero_mask] = np.max(depths)
+
+        # depth test
+        mask = mask & (0 <= -z[:, :, 0]) & (-z[:, :, 0] <= depths+0.5)
+        mask = mask.reshape(-1)
+
+        # add feature grid near cam center
+        ray_o = c2w[:3, 3]
+        ray_o = torch.from_numpy(ray_o).unsqueeze(0)
+        # Generate second mask based on radius of 0.5 m
+        dist = points_bak-ray_o
+        dist = torch.sum(dist*dist, axis=1)
+        mask2 = dist < 0.5*0.5
+        mask2 = mask2.cpu().numpy()
+        mask = mask | mask2
+
+        points = points[mask]
+        mask = mask.reshape(val_shape[2], val_shape[1], val_shape[0])
         
-            # generate an array of points
-            points = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3)
-            # If coarse grid then return all ones
-            if key == 'grid_coarse':
-                mask = np.ones(val_shape[::-1]).astype(np.bool)
-                return mask
-            # backup points
-            points_bak = points.clone()
-            # get world to camera transform on cpu
-            c2w = c2w.cpu().numpy()
-            w2c = np.linalg.inv(c2w)
+        # This section commented out for now, BG does not require mask
+        # # BACKGROUND SPHERE MASK
+        # # Get azimuth and polar angle and radius
+        # PHI, THET = torch.meshgrid(torch.linspace(0,self.sphere_len[0],val_shape[0]),
+        #                             torch.linspace(0,self.sphere_len[1],val_shape[1]))
+        # rho = 50 # making this large just in case (should be able to use 1)
+        # # Convert to cartesian
+        # X = rho*torch.sin(PHI)*torch.cos(THET)
+        # Y = rho*torch.sin(PHI)*torch.sin(THET)
+        # Z = rho*torch.cos(PHI)
+        # # generate an array of points
+        # points = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3, 1) # Not sure about this 1 at the end
+        # # backup points
+        # points_bak = points.clone()
+        # # get world to camera transform on cpu
+        # c2w = c2w.cpu().numpy()
+        # w2c = np.linalg.inv(c2w)
+        # C_cw = w2c[:3,:3]
+        # # map vertices into camera frame
+        # cam_cord = C_cw @ np.array(points)
+        # K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
+        # # Flip x-axis and get pixel coords of points in grid
+        # cam_cord[:, 0] *= -1
+        # uv = K@cam_cord
+        # z = uv[:, -1:]+1e-5
+        # uv = uv[:, :2]/z
+        # uv = uv.astype(np.float32)
+        # # compute depths in camera frame
+        # remap_chunk = int(3e4)
+        # depths = []
+        # for i in range(0, uv.shape[0], remap_chunk):
+        #     depths += [cv2.remap(depth_np,
+        #                         uv[i:i+remap_chunk, 0],
+        #                         uv[i:i+remap_chunk, 1],
+        #                         interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
+        # depths = np.concatenate(depths, axis=0)
+        # # mask based on width and height of camera frame (frustrum)
+        # edge = 0
+        # mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
+        #     (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
 
-            ones = np.ones_like(points[:, 0]).reshape(-1, 1)
-            # get points in homog form
-            homo_vertices = np.concatenate(
-                [points, ones], axis=1).reshape(-1, 4, 1)
-            # map vertices into camera frame
-            cam_cord_homo = w2c@homo_vertices
-            cam_cord = cam_cord_homo[:, :3]
-            K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
-            # Flip x-axis and get pixel coords of points in grid
-            cam_cord[:, 0] *= -1
-            uv = K@cam_cord
-            z = uv[:, -1:]+1e-5
-            uv = uv[:, :2]/z
-            uv = uv.astype(np.float32)
-            # compute depths in camera frame
-            remap_chunk = int(3e4)
-            depths = []
-            for i in range(0, uv.shape[0], remap_chunk):
-                depths += [cv2.remap(depth_np,
-                                    uv[i:i+remap_chunk, 0],
-                                    uv[i:i+remap_chunk, 1],
-                                    interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
-            depths = np.concatenate(depths, axis=0)
-            # mask based on width and height of camera frame (frustrum)
-            edge = 0
-            mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
-                (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
-
-            # For ray with depth==0, fill it with maximum depth
-            zero_mask = (depths == 0)
-            depths[zero_mask] = np.max(depths)
-
-            # depth test
-            mask = mask & (0 <= -z[:, :, 0]) & (-z[:, :, 0] <= depths+0.5)
-            mask = mask.reshape(-1)
-
-            # add feature grid near cam center
-            ray_o = c2w[:3, 3]
-            ray_o = torch.from_numpy(ray_o).unsqueeze(0)
-            # Generate second mask based on radius of 0.5 m
-            dist = points_bak-ray_o
-            dist = torch.sum(dist*dist, axis=1)
-            mask2 = dist < 0.5*0.5
-            mask2 = mask2.cpu().numpy()
-            mask = mask | mask2
-
-            points = points[mask]
-            mask = mask.reshape(val_shape[2], val_shape[1], val_shape[0])
-        else: # Background sphere mask
-            # Get azimuth and polar angle and radius
-            PHI, THET = torch.meshgrid(torch.linspace(0,self.sphere_len[0],val_shape[0]),
-                                      torch.linspace(0,self.sphere_len[1],val_shape[1]))
-            rho = 50 # making this large just in case (should be able to use 1)
-            # Convert to cartesian
-            X = rho*torch.sin(PHI)*torch.cos(THET)
-            Y = rho*torch.sin(PHI)*torch.sin(THET)
-            Z = rho*torch.cos(PHI)
-            # generate an array of points
-            points = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3, 1) # Not sure about this 1 at the end
-            # backup points
-            points_bak = points.clone()
-            # get world to camera transform on cpu
-            c2w = c2w.cpu().numpy()
-            w2c = np.linalg.inv(c2w)
-            C_cw = w2c[:3,:3]
-            # map vertices into camera frame
-            cam_cord = C_cw @ np.array(points)
-            K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
-            # Flip x-axis and get pixel coords of points in grid
-            cam_cord[:, 0] *= -1
-            uv = K@cam_cord
-            z = uv[:, -1:]+1e-5
-            uv = uv[:, :2]/z
-            uv = uv.astype(np.float32)
-            # compute depths in camera frame
-            remap_chunk = int(3e4)
-            depths = []
-            for i in range(0, uv.shape[0], remap_chunk):
-                depths += [cv2.remap(depth_np,
-                                    uv[i:i+remap_chunk, 0],
-                                    uv[i:i+remap_chunk, 1],
-                                    interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
-            depths = np.concatenate(depths, axis=0)
-            # mask based on width and height of camera frame (frustrum)
-            edge = 0
-            mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
-                (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
-
-            # Just get positive depths
-            mask = mask & (0 <= -z[:, :, 0])
-            mask = mask.reshape(val_shape[0], val_shape[1])
+        # # Just get positive depths
+        # mask = mask & (0 <= -z[:, :, 0])
+        # mask = mask.reshape(val_shape[0], val_shape[1])
             
         return mask
 
@@ -382,7 +384,8 @@ class Mapper(object):
                         mask = torch.from_numpy(mask).permute(2, 1, 0).unsqueeze(
                             0).unsqueeze(0).repeat(1, val.shape[1], 1, 1, 1)
                     val = val.to(device)
-                    # val_grad is the optimizable part, other parameters will be fixed
+                    # Set up val_grad as the variable to be tuned by the optimization
+                    # This is later inserted into "c" variable for tuning by back prop
                     val_grad = val[mask].clone()
                     val_grad = Variable(val_grad.to(
                         device), requires_grad=True)
@@ -542,16 +545,19 @@ class Mapper(object):
             batch_gt_depth = torch.cat(batch_gt_depth_list)
             batch_gt_color = torch.cat(batch_gt_color_list)
 
+            # ****NOTE: Consider removing this section when background is enabled
+            # Just ensures that gt_depth is within bounding box.
             if self.nice:
                 # should pre-filter those out of bounding box depth value
                 with torch.no_grad():
-                    # detach rays and find which ones are inside of the bounding box.
+                    # detach rays and find which ones will be contained by the bounding box.
                     det_rays_o = batch_rays_o.clone().detach().unsqueeze(-1)  # (N, 3, 1)
                     det_rays_d = batch_rays_d.clone().detach().unsqueeze(-1)  # (N, 3, 1)
                     t = (self.bound.unsqueeze(0).to(
                         device)-det_rays_o)/det_rays_d
                     t, _ = torch.min(torch.max(t, dim=2)[0], dim=1)
                     inside_mask = t >= batch_gt_depth
+                # only keep rays that are entirely contained in box
                 batch_rays_d = batch_rays_d[inside_mask]
                 batch_rays_o = batch_rays_o[inside_mask]
                 batch_gt_depth = batch_gt_depth[inside_mask]

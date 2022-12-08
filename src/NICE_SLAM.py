@@ -253,7 +253,8 @@ class NICE_SLAM():
             sphere_grid_len = cfg['grid_len']['sphere']
             self.sphere_grid_len = sphere_grid_len
             self.sphere_len = np.array([360, 180])
-            sphere_val_shape = list(map(int, (self.sphere_len/sphere_grid_len).tolist()))
+            # third dimension of sphere is dummy var to 
+            sphere_val_shape = list(map(int, (self.sphere_len/sphere_grid_len).tolist())).append(1)
             self.sphere_val_shape = sphere_val_shape
             val_shape = [1, c_dim, *sphere_val_shape]
             sphere_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)
