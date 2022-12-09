@@ -190,9 +190,9 @@ class Renderer(object):
         # Note: here we are temporarily hijacking the color grid inputs to update 
         # the sphere grid voxels (actually pixels)
         if 'grid_sphere' in c.keys():
-            # Make copy of vars
+            # Make copy of features
             c_bg = c.clone()
-            # Replace color grid
+            # Replace color grid with sphere grid
             c_bg['grid_color'] = c['grid_sphere']
             # Generate points from ray directions
             polar = torch.arccos(rays_d[:,2])
@@ -206,7 +206,7 @@ class Renderer(object):
             raw_bg = None
             
         depth, uncertainty, color, weights = raw2outputs_nerf_color(
-            raw, z_vals, rays_d, occupancy=self.occupancy, device=device)
+            raw, z_vals, rays_d, raw_bg=raw_bg, occupancy=self.occupancy, device=device)
         
         if N_importance > 0:
             z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])

@@ -240,11 +240,13 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, de
         # original nerf, volume density
         alpha = raw2alpha(raw[..., -1], dists)  # (N_rays, N_samples)
     # Get cumulative weights along rays
-    weights = alpha.float() * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).to(
-        device).float(), (1.-alpha + 1e-10).float()], -1).float(), -1) #(N_rays, N_samples + 1)
-    # divide into foreground and background weights. Background is residual after all points
-    weights_fg = weights[:, :-1]
-    weights_bg = 1-weights[:,-1]
+    T_i = torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).to(
+        device).float(), (1.-alpha + 1e-10).float()], -1).float(), -1)
+    # Foreground weighting
+    weights_fg = alpha.float() * T_i[:, :-1] #(N_rays, N_samples)
+    # Background weighting - transmittence only since background NeRF modeled as single color
+    weights_bg = T_i[:,-1]
+    
     # Mult weights by color
     rgb_map_fg = torch.sum(weights_fg[..., None] * rgb, -2)  # (N_rays, 3)
     # if background is populated then get colors
