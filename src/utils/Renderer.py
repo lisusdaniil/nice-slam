@@ -48,16 +48,14 @@ class Renderer(object):
             pi = pi.unsqueeze(0)
             if self.nice:
                 ret = decoders(pi, c_grid=c, stage=stage)
-                if 'grid_sphere' in c:
-                    # Get background sphere outputs 
-                    pass
             else:
                 ret = decoders(pi, c_grid=None)
             ret = ret.squeeze(0)
             if len(ret.shape) == 1 and ret.shape[0] == 4:
                 ret = ret.unsqueeze(0)
-
-            ret[~mask, 3] = 100
+            # don't mask if computing sphere part
+            if not 'grid_sphere' in c.keys():
+                ret[~mask, 3] = 100
             rets.append(ret)
 
         ret = torch.cat(rets, dim=0)
@@ -198,10 +196,12 @@ class Renderer(object):
             polar = torch.arccos(rays_d[:,2])
             azim = torch.sign(rays_d[:,1]) * torch.arccos(rays_d[:,0] /
                             torch.linalg.vector_norm(rays_d[:,:2],dim=1) ) 
-            pointsf = torch.cat([polar, azim, torch.ones_like(azim)],dim=-1)
+            pointsf = torch.cat([azim, polar, torch.ones_like(azim)],dim=-1)
             # evaluate points using networks
             raw_bg = self.eval_points(pointsf, decoders, c_bg, stage, device)
-            raw_bg = raw_bg.reshape(N_rays, N_samples+N_surface, -1)
+            #raw_bg = raw_bg.reshape(N_rays, N_samples+N_surface, -1)
+            raw_bg = raw_bg.reshape(N_rays, None, -1)
+            print(f"DEBUG: raw_bg shape {raw_bg.shape}")
         else:
             raw_bg = None
             
