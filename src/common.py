@@ -246,7 +246,6 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, de
     weights_fg = alpha.float() * T_i[:, :-1] #(N_rays, N_samples)
     # Background weighting - transmittence only since background NeRF modeled as single color
     weights_bg = T_i[:,-1]
-    
     # Mult weights by color
     rgb_map_fg = torch.sum(weights_fg[..., None] * rgb, -2)  # (N_rays, 3)
     # if background is populated then get colors
@@ -254,7 +253,7 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, de
         rgb_map_bg = 0.
     else:
         rgb_bg = raw_bg[..., :-1]
-        rgb_map_bg = weights_bg * rgb_bg # (N_rays, 3)
+        rgb_map_bg = weights_bg[:,None] * rgb_bg # (N_rays, 3)
     # combine foregrnd and backgrnd
     rgb_map = rgb_map_fg + rgb_map_bg
     # Depth map

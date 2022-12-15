@@ -20,7 +20,7 @@ class Renderer(object):
 
         self.H, self.W, self.fx, self.fy, self.cx, self.cy = slam.H, slam.W, slam.fx, slam.fy, slam.cx, slam.cy
 
-    def eval_points(self, p, decoders, c=None, stage='color', device='cuda:0'):
+    def eval_points(self, p, decoders, c=None, stage='color', device='cuda:0',bg=False):
         """
         Evaluates the occupancy and/or color value for the points.
 
@@ -30,6 +30,7 @@ class Renderer(object):
             c (dicts, optional): Feature grids. Defaults to None.
             stage (str, optional): Query stage, corresponds to different levels. Defaults to 'color'.
             device (str, optional): CUDA device. Defaults to 'cuda:0'.
+            bg(bool,optional): Indicates that we are evaluating points in the background
 
         Returns:
             ret (tensor): occupancy (and color) value of input points.
@@ -39,12 +40,12 @@ class Renderer(object):
         bound = self.bound
         rets = []
         for pi in p_split:
-            # mask for points out of bound
-            mask_x = (pi[:, 0] < bound[0][1]) & (pi[:, 0] > bound[0][0])
-            mask_y = (pi[:, 1] < bound[1][1]) & (pi[:, 1] > bound[1][0])
-            mask_z = (pi[:, 2] < bound[2][1]) & (pi[:, 2] > bound[2][0])
-            mask = mask_x & mask_y & mask_z
-
+            if not bg:
+                # mask = true for points inside the boundaries
+                mask_x = (pi[:, 0] < bound[0][1]) & (pi[:, 0] > bound[0][0])
+                mask_y = (pi[:, 1] < bound[1][1]) & (pi[:, 1] > bound[1][0])
+                mask_z = (pi[:, 2] < bound[2][1]) & (pi[:, 2] > bound[2][0])
+                mask = mask_x & mask_y & mask_z
             pi = pi.unsqueeze(0)
             if self.nice:
                 ret = decoders(pi, c_grid=c, stage=stage)
@@ -53,9 +54,11 @@ class Renderer(object):
             ret = ret.squeeze(0)
             if len(ret.shape) == 1 and ret.shape[0] == 4:
                 ret = ret.unsqueeze(0)
-            # don't mask if computing sphere part
-            if not 'grid_sphere' in c.keys():
-                ret[~mask, 3] = 100
+            # don't use mask if working on background
+            if not bg:
+                # Not clear why points outside boundary have full occupancy.
+                # ret[~mask, 3] = 100
+                ret[~mask,3] = 0
             rets.append(ret)
 
         ret = torch.cat(rets, dim=0)
@@ -188,20 +191,21 @@ class Renderer(object):
         # Note: here we are temporarily hijacking the color grid inputs to update 
         # the sphere grid voxels (actually pixels)
         if 'grid_sphere' in c.keys():
-            # Make copy of features
-            c_bg = c.clone()
+            # Temporarily store the color grid
+            tmp_clr = c['grid_color']
             # Replace color grid with sphere grid
-            c_bg['grid_color'] = c['grid_sphere']
+            c['grid_color'] = c['grid_sphere']
             # Generate points from ray directions
             polar = torch.arccos(rays_d[:,2])
             azim = torch.sign(rays_d[:,1]) * torch.arccos(rays_d[:,0] /
                             torch.linalg.vector_norm(rays_d[:,:2],dim=1) ) 
-            pointsf = torch.cat([azim, polar, torch.ones_like(azim)],dim=-1)
+            pointsf = torch.stack([azim, polar, torch.ones_like(azim)],dim=1)
             # evaluate points using networks
-            raw_bg = self.eval_points(pointsf, decoders, c_bg, stage, device)
-            #raw_bg = raw_bg.reshape(N_rays, N_samples+N_surface, -1)
-            raw_bg = raw_bg.reshape(N_rays, None, -1)
-            print(f"DEBUG: raw_bg shape {raw_bg.shape}")
+            raw_bg = self.eval_points(pointsf, decoders, c, stage, device,bg=True)
+            # Move sphere grid back into place
+            c['grid_sphere'] = c['grid_color']
+            # Restore color grid
+            c['grid_color'] = tmp_clr
         else:
             raw_bg = None
             

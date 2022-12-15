@@ -380,7 +380,10 @@ class Mapper(object):
                     # get the mask for the current frame to find which parameters to optimize
                     mask = self.get_mask_from_c2w(
                         mask_c2w, key, val.shape[2:], gt_depth_np)
-                    if not key == 'grid_sphere':
+                    if key == 'grid_sphere':
+                        mask = torch.from_numpy(mask).permute(2, 1, 0).unsqueeze(
+                            0).unsqueeze(0).repeat(1, val.shape[1], 1, 1, 1)
+                    else:
                         mask = torch.from_numpy(mask).permute(2, 1, 0).unsqueeze(
                             0).unsqueeze(0).repeat(1, val.shape[1], 1, 1, 1)
                     val = val.to(device)

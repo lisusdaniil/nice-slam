@@ -246,9 +246,6 @@ class NICE_SLAM():
         val_shape = [1, c_dim, *color_val_shape]
         color_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)
         c[color_key] = color_val
-        print(val_shape)
-        print(color_val_shape)
-        print(map(int, (xyz_len/color_grid_len).tolist()))
 
         # Background sphere (color only) - in degrees
         if self.args.bg_sphr:
