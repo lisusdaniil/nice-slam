@@ -39,6 +39,8 @@ class NICE_SLAM():
             self.output = cfg['data']['output']
         else:
             self.output = args.output
+        if args.bg_sphr:
+            self.output += '/bg_sphr'
         self.ckptsdir = os.path.join(self.output, 'ckpts')
         os.makedirs(self.output, exist_ok=True)
         os.makedirs(self.ckptsdir, exist_ok=True)

@@ -64,7 +64,7 @@ class Renderer(object):
         ret = torch.cat(rets, dim=0)
         return ret
 
-    def render_batch_ray(self, c, decoders, rays_d, rays_o, device, stage, gt_depth=None):
+    def render_batch_ray(self, c, decoders, rays_d, rays_o, device, stage, gt_depth=None, bg_only=False):
         """
         Render color, depth and uncertainty of a batch of rays.
 
@@ -76,6 +76,7 @@ class Renderer(object):
             device (str): device name to compute on.
             stage (str): query stage.
             gt_depth (tensor, optional): sensor depth image. Defaults to None.
+            bg_only (bool, optional): Render background values only
 
         Returns:
             depth (tensor): rendered depth.
@@ -210,9 +211,10 @@ class Renderer(object):
             raw_bg = None
             
         depth, uncertainty, color, weights = raw2outputs_nerf_color(
-            raw, z_vals, rays_d, raw_bg=raw_bg, occupancy=self.occupancy, device=device)
+            raw, z_vals, rays_d, raw_bg=raw_bg, occupancy=self.occupancy, device=device,bg_only=bg_only)
         
         if N_importance > 0:
+            print("what does this do???????????")
             z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
             z_samples = sample_pdf(
                 z_vals_mid, weights[..., 1:-1], N_importance, det=(self.perturb == 0.), device=device)
@@ -231,7 +233,7 @@ class Renderer(object):
 
         return depth, uncertainty, color
 
-    def render_img(self, c, decoders, c2w, device, stage, gt_depth=None):
+    def render_img(self, c, decoders, c2w, device, stage, gt_depth=None, bg_only=False):
         """
         Renders out depth, uncertainty, and color images.
 
@@ -242,6 +244,7 @@ class Renderer(object):
             device (str): device name to compute on.
             stage (str): query stage.
             gt_depth (tensor, optional): sensor depth image. Defaults to None.
+            bg_only (bool, optional): Render only the background sphere for the image
 
         Returns:
             depth (tensor, H*W): rendered depth image.
@@ -268,11 +271,11 @@ class Renderer(object):
                 rays_o_batch = rays_o[i:i+ray_batch_size]
                 if gt_depth is None:
                     ret = self.render_batch_ray(
-                        c, decoders, rays_d_batch, rays_o_batch, device, stage, gt_depth=None)
+                        c, decoders, rays_d_batch, rays_o_batch, device, stage, gt_depth=None,bg_only=bg_only)
                 else:
                     gt_depth_batch = gt_depth[i:i+ray_batch_size]
                     ret = self.render_batch_ray(
-                        c, decoders, rays_d_batch, rays_o_batch, device, stage, gt_depth=gt_depth_batch)
+                        c, decoders, rays_d_batch, rays_o_batch, device, stage, gt_depth=gt_depth_batch,bg_only=bg_only)
 
                 depth, uncertainty, color = ret
                 depth_list.append(depth.double())

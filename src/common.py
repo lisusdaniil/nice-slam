@@ -203,7 +203,7 @@ def get_tensor_from_camera(RT, Tquad=False):
     return tensor
 
 
-def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, device='cuda:0'):
+def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, bg_only=False, device='cuda:0'):
     """
     Transforms model's predictions to semantically meaningful values.
 
@@ -213,7 +213,8 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, de
         z_vals (tensor, N_rays*N_samples): integration time.
         rays_d (tensor, N_rays*3): direction of each ray.
         occupancy (bool, optional): occupancy or volume density. Defaults to False.
-        rgb_bg (tensor, N_rays*3) : background color. Defaults to 0. 
+        rgb_bg (tensor, N_rays*3) : background color. Defaults to 0.
+        bg_only (bool, optional) : if true renders background values only 
         device (str, optional): device. Defaults to 'cuda:0'.
 
     Returns:
@@ -255,7 +256,10 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, de
         rgb_bg = raw_bg[..., :-1]
         rgb_map_bg = weights_bg[:,None] * rgb_bg # (N_rays, 3)
     # combine foregrnd and backgrnd
-    rgb_map = rgb_map_fg + rgb_map_bg
+    if bg_only:
+        rgb_map = rgb_bg
+    else:
+        rgb_map = rgb_map_fg + rgb_map_bg
     # Depth map
     depth_map = torch.sum(weights_fg * z_vals, -1)  # (N_rays)
     tmp = (z_vals-depth_map.unsqueeze(-1))  # (N_rays, N_samples)
