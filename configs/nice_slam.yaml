@@ -9,7 +9,7 @@ grid_len:
   middle: 0.32 
   fine: 0.16
   color: 0.16
-  bg: 0.017
+  bg: 0.05
   bound_divisible: 0.32
 pretrained_decoders:
   coarse: pretrained/coarse.pt

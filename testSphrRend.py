@@ -59,14 +59,9 @@ def main():
         if i % 2 == 0:
             grid_azi[:,:,:,:,i] = 1.
         
-    # Set grid
-    slam.shared_c['grid_sphere'] = grid_azi
-    # plt.figure()
-    # plt.imshow(grid_azi[0,0,:,:,:].cpu())
-    # plt.show()
     
     # viewpoint
-    plt.figure()
+    
     angVals = np.linspace(0,np.pi, 5)
     for ang in angVals:
         R_wc = tr.roty(ang)
@@ -76,6 +71,7 @@ def main():
         print(c2w)
         c2w = torch.Tensor(c2w).to(device)
         # Render image
+        slam.shared_c['grid_sphere'] = grid_inc
         depth, uncertainty, color = slam.renderer.render_img(
         slam.shared_c,
         slam.shared_decoders,
@@ -84,11 +80,28 @@ def main():
         stage='color',
         bg_only=True)
         color_np = color.detach().cpu().numpy()
+        fig,axs = plt.subplots(1,2)
+        axs[0].imshow(color_np, cmap="plasma")
+        axs[0].set_title(f"inc change: center angle: {ang*180/np.pi} deg")
+        axs[0].set_xticks([])
+        axs[0].set_yticks([])
         
-        plt.imshow(color_np, cmap="plasma")
-        plt.title(f"center angle: {ang*180/np.pi} deg")
-        plt.xticks([])
-        plt.yticks([])
+        # Render image
+        slam.shared_c['grid_sphere'] = grid_azi
+        depth, uncertainty, color = slam.renderer.render_img(
+        slam.shared_c,
+        slam.shared_decoders,
+        c2w,
+        device,
+        stage='color',
+        bg_only=True)
+        color_np = color.detach().cpu().numpy()
+
+        axs[1].imshow(color_np, cmap="plasma")
+        axs[1].set_title(f"azi change: center angle: {ang*180/np.pi} deg")
+        axs[1].set_xticks([])
+        axs[1].set_yticks([])
+        
         plt.show()
     
 if __name__ == '__main__':

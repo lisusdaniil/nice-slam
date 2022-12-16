@@ -60,7 +60,7 @@ class Renderer(object):
                 ret[~mask,3] = 0
             else:
                 # Test with no NeRF decoding, just background color
-                ret = decoders.bg_decoder.sample_grid_feature(pi,c['grid_sphere'],debug=True)
+                ret = decoders.bg_decoder.sample_grid_feature(pi,c['grid_sphere'])
                 # just use the first 4 values of the feature
                 ret = ret.squeeze(0)[:4,:].transpose(0,1)
             rets.append(ret)
