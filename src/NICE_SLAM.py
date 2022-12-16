@@ -155,6 +155,10 @@ class NICE_SLAM():
             self.shared_decoders.middle_decoder.bound = self.bound
             self.shared_decoders.fine_decoder.bound = self.bound
             self.shared_decoders.color_decoder.bound = self.bound
+            # Background decoder bound (az,inc,1)
+            self.shared_decoders.bg_decoder.bound = np.array([[0,2*np.pi],
+                                                            [0, np.pi],
+                                                            [1-0.01,1+0.01]])
             if self.coarse:
                 self.shared_decoders.coarse_decoder.bound = self.bound*self.coarse_bound_enlarge
 
@@ -249,15 +253,17 @@ class NICE_SLAM():
         color_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)
         c[color_key] = color_val
 
-        # Background sphere (color only) - in degrees
+        # Background sphere (color only) - in radians
         if self.args.bg_sphr:
             sphere_key = 'grid_sphere'
-            sphere_grid_len = cfg['grid_len']['sphere']
+            sphere_grid_len = cfg['grid_len']['bg']
             self.sphere_grid_len = sphere_grid_len
-            self.sphere_len = np.array([360, 180])
+            self.sphere_len = np.array([2*np.pi, np.pi])
             # third dimension of sphere is dummy var to 
             sphere_val_shape = [int(x) for x in self.sphere_len/sphere_grid_len]
             sphere_val_shape.append(1)
+            # This next line is important for grid sampling for some reason
+            sphere_val_shape[0], sphere_val_shape[2] = sphere_val_shape[2], sphere_val_shape[0]
             self.sphere_val_shape = sphere_val_shape
             val_shape = [1, c_dim, *sphere_val_shape]
             sphere_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)

@@ -56,7 +56,7 @@ if __name__ == '__main__':
     gt_c2w_list[:, :3, 3] /= scale
     estimate_c2w_list = estimate_c2w_list.cpu().numpy()
     gt_c2w_list = gt_c2w_list.cpu().numpy()
-
+    
     frontend = SLAMFrontend(output, init_pose=estimate_c2w_list[0], cam_scale=0.3,
                             save_rendering=args.save_rendering, near=0,
                             estimate_c2w_list=estimate_c2w_list, gt_c2w_list=gt_c2w_list).start()

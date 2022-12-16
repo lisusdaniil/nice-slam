@@ -1,5 +1,11 @@
 inherit_from: configs/TUM_RGBD/tum.yaml
+tracking:
+  vis_freq: 500
+  vis_inside_freq: 1000
 mapping:
+  vis_freq: 500
+  vis_inside_freq: 1000
+  pixels: 200
   bound: [[-4.6,2.6],[-3.3,3.2],[-2.0,4.9]]
   marching_cubes_bound: [[-2.6,1.1],[-1.5,1.5],[-0.6,2.4]]
 data:

@@ -292,7 +292,8 @@ class NICE(nn.Module):
 
     def __init__(self, dim=3, c_dim=32,
                  coarse_grid_len=2.0,  middle_grid_len=0.16, fine_grid_len=0.16,
-                 color_grid_len=0.16, hidden_size=32, coarse=False, pos_embedding_method='fourier'):
+                 color_grid_len=0.16, hidden_size=32, coarse=False, pos_embedding_method='fourier',
+                 bg_grid_len=0.17):
         super().__init__()
 
         if coarse:
@@ -308,11 +309,15 @@ class NICE(nn.Module):
         self.color_decoder = MLP(name='color', dim=dim, c_dim=c_dim, color=True,
                                  skips=[2], n_blocks=5, hidden_size=hidden_size,
                                  grid_len=color_grid_len, pos_embedding_method=pos_embedding_method)
-
+        self.bg_decoder = MLP(name='bg', dim=dim, c_dim=c_dim, color=True,
+                                 skips=[2], n_blocks=5, hidden_size=hidden_size,
+                                 grid_len=bg_grid_len, pos_embedding_method=pos_embedding_method)
+        
     def forward(self, p, c_grid, stage='middle', **kwargs):
         """
             Output occupancy/color in different stage.
         """
+        # ADD BACKGROUND INTO FORWARD.
         device = f'cuda:{p.get_device()}'
         if stage == 'coarse':
             occ = self.coarse_decoder(p, c_grid)
@@ -340,3 +345,4 @@ class NICE(nn.Module):
             middle_occ = middle_occ.squeeze(0)
             raw[..., -1] = fine_occ+middle_occ
             return raw
+        

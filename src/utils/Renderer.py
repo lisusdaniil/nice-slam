@@ -1,6 +1,6 @@
 import torch
 from src.common import get_rays, raw2outputs_nerf_color, sample_pdf
-
+import numpy as np
 
 class Renderer(object):
     def __init__(self, cfg, args, slam, points_batch_size=500000, ray_batch_size=100000):
@@ -46,19 +46,23 @@ class Renderer(object):
                 mask_y = (pi[:, 1] < bound[1][1]) & (pi[:, 1] > bound[1][0])
                 mask_z = (pi[:, 2] < bound[2][1]) & (pi[:, 2] > bound[2][0])
                 mask = mask_x & mask_y & mask_z
-            pi = pi.unsqueeze(0)
-            if self.nice:
-                ret = decoders(pi, c_grid=c, stage=stage)
-            else:
-                ret = decoders(pi, c_grid=None)
-            ret = ret.squeeze(0)
-            if len(ret.shape) == 1 and ret.shape[0] == 4:
-                ret = ret.unsqueeze(0)
-            # don't use mask if working on background
-            if not bg:
-                # Not clear why points outside boundary have full occupancy.
+                pi = pi.unsqueeze(0)
+                if self.nice:
+                    ret = decoders(pi, c_grid=c, stage=stage)
+                else:
+                    ret = decoders(pi, c_grid=None)
+                ret = ret.squeeze(0)
+                if len(ret.shape) == 1 and ret.shape[0] == 4:
+                    ret = ret.unsqueeze(0)
+                # Points outside boundary have full occupancy.
                 # ret[~mask, 3] = 100
+                # Points outside boundeary have zero occupancy
                 ret[~mask,3] = 0
+            else:
+                # Test with no NeRF decoding, just background color
+                ret = decoders.bg_decoder.sample_grid_feature(pi,c['grid_sphere'],debug=True)
+                # just use the first 4 values of the feature
+                ret = ret.squeeze(0)[:4,:].transpose(0,1)
             rets.append(ret)
 
         ret = torch.cat(rets, dim=0)
@@ -192,27 +196,21 @@ class Renderer(object):
         # Note: here we are temporarily hijacking the color grid inputs to update 
         # the sphere grid voxels (actually pixels)
         if 'grid_sphere' in c.keys():
-            # Temporarily store the color grid
-            tmp_clr = c['grid_color']
-            # Replace color grid with sphere grid
-            c['grid_color'] = c['grid_sphere']
+            # Normalize rays
+            rays_d = torch.nn.functional.normalize(rays_d)
             # Generate points from ray directions
-            polar = torch.arccos(rays_d[:,2])
-            azim = torch.sign(rays_d[:,1]) * torch.arccos(rays_d[:,0] /
+            polar = torch.acos(rays_d[:,2])
+            azim = torch.sign(rays_d[:,1]) * torch.acos(rays_d[:,0] /
                             torch.linalg.vector_norm(rays_d[:,:2],dim=1) ) 
+            # wrap points around so that they are defined between 0 and 2pi
+            azim = torch.remainder(azim, 2*np.pi)
             pointsf = torch.stack([azim, polar, torch.ones_like(azim)],dim=1)
             # evaluate points using networks
             raw_bg = self.eval_points(pointsf, decoders, c, stage, device,bg=True)
-            # Move sphere grid back into place
-            c['grid_sphere'] = c['grid_color']
-            # Restore color grid
-            c['grid_color'] = tmp_clr
         else:
             raw_bg = None
-            
         depth, uncertainty, color, weights = raw2outputs_nerf_color(
             raw, z_vals, rays_d, raw_bg=raw_bg, occupancy=self.occupancy, device=device,bg_only=bg_only)
-        
         if N_importance > 0:
             print("what does this do???????????")
             z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
@@ -264,7 +262,8 @@ class Renderer(object):
             color_list = []
 
             ray_batch_size = self.ray_batch_size
-            gt_depth = gt_depth.reshape(-1)
+            if not gt_depth is None:
+                gt_depth = gt_depth.reshape(-1)
 
             for i in range(0, rays_d.shape[0], ray_batch_size):
                 rays_d_batch = rays_d[i:i+ray_batch_size]

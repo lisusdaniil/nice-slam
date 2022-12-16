@@ -1,7 +1,7 @@
 coarse: True
 sync_method: strict
 scale: 1
-verbose: True
+verbose: False
 occupancy: True
 low_gpu_mem: True
 grid_len:
@@ -9,7 +9,7 @@ grid_len:
   middle: 0.32 
   fine: 0.16
   color: 0.16
-  sphere: 20
+  bg: 0.017
   bound_divisible: 0.32
 pretrained_decoders:
   coarse: pretrained/coarse.pt
