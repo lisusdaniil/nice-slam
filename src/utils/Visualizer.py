@@ -105,7 +105,7 @@ class Visualizer(object):
                 plt.clf()
                 
                 # Render background if we have one
-                if self.args.bg_sphr:
+                if not self.args is None and 'bg_sphr' in self.args:
                     depth, uncertainty, color = self.renderer.render_img(
                     c,
                     decoders,

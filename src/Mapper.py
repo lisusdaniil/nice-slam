@@ -90,7 +90,7 @@ class Mapper(object):
         if 'Demo' not in self.output:  # disable this visualization in demo
             self.visualizer = Visualizer(freq=cfg['mapping']['vis_freq'], inside_freq=cfg['mapping']['vis_inside_freq'],
                                          vis_dir=os.path.join(self.output, 'mapping_vis'), renderer=self.renderer,
-                                         verbose=self.verbose, device=self.device)
+                                         verbose=self.verbose, device=self.device,args=self.args)
         self.H, self.W, self.fx, self.fy, self.cx, self.cy = slam.H, slam.W, slam.fx, slam.fy, slam.cx, slam.cy
 
     def get_mask_from_c2w(self, c2w, key, val_shape, depth_np):
@@ -177,50 +177,6 @@ class Mapper(object):
         points = points[mask]
         mask = mask.reshape(val_shape[2], val_shape[1], val_shape[0])
         
-        # This section commented out for now, BG does not require mask
-        # # BACKGROUND SPHERE MASK
-        # # Get azimuth and polar angle and radius
-        # PHI, THET = torch.meshgrid(torch.linspace(0,self.sphere_len[0],val_shape[0]),
-        #                             torch.linspace(0,self.sphere_len[1],val_shape[1]))
-        # rho = 50 # making this large just in case (should be able to use 1)
-        # # Convert to cartesian
-        # X = rho*torch.sin(PHI)*torch.cos(THET)
-        # Y = rho*torch.sin(PHI)*torch.sin(THET)
-        # Z = rho*torch.cos(PHI)
-        # # generate an array of points
-        # points = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3, 1) # Not sure about this 1 at the end
-        # # backup points
-        # points_bak = points.clone()
-        # # get world to camera transform on cpu
-        # c2w = c2w.cpu().numpy()
-        # w2c = np.linalg.inv(c2w)
-        # C_cw = w2c[:3,:3]
-        # # map vertices into camera frame
-        # cam_cord = C_cw @ np.array(points)
-        # K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
-        # # Flip x-axis and get pixel coords of points in grid
-        # cam_cord[:, 0] *= -1
-        # uv = K@cam_cord
-        # z = uv[:, -1:]+1e-5
-        # uv = uv[:, :2]/z
-        # uv = uv.astype(np.float32)
-        # # compute depths in camera frame
-        # remap_chunk = int(3e4)
-        # depths = []
-        # for i in range(0, uv.shape[0], remap_chunk):
-        #     depths += [cv2.remap(depth_np,
-        #                         uv[i:i+remap_chunk, 0],
-        #                         uv[i:i+remap_chunk, 1],
-        #                         interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
-        # depths = np.concatenate(depths, axis=0)
-        # # mask based on width and height of camera frame (frustrum)
-        # edge = 0
-        # mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
-        #     (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
-
-        # # Just get positive depths
-        # mask = mask & (0 <= -z[:, :, 0])
-        # mask = mask.reshape(val_shape[0], val_shape[1])
             
         return mask
 
