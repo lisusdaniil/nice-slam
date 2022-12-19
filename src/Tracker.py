@@ -90,18 +90,19 @@ class Tracker(object):
         Hedge = self.ignore_edge_H
         batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(
             Hedge, H-Hedge, Wedge, W-Wedge, batch_size, H, W, fx, fy, cx, cy, c2w, gt_depth, gt_color, self.device)
-        # if self.nice:
-        #     # should pre-filter those out of bounding box depth value
-        #     with torch.no_grad():
-        #         det_rays_o = batch_rays_o.clone().detach().unsqueeze(-1)  # (N, 3, 1)
-        #         det_rays_d = batch_rays_d.clone().detach().unsqueeze(-1)  # (N, 3, 1)
-        #         t = (self.bound.unsqueeze(0).to(device)-det_rays_o)/det_rays_d
-        #         t, _ = torch.min(torch.max(t, dim=2)[0], dim=1)
-        #         inside_mask = t >= batch_gt_depth
-        #     batch_rays_d = batch_rays_d[inside_mask]
-        #     batch_rays_o = batch_rays_o[inside_mask]
-        #     batch_gt_depth = batch_gt_depth[inside_mask]
-        #     batch_gt_color = batch_gt_color[inside_mask]
+        if self.nice: 
+            # should pre-filter those out of bounding box depth value
+            with torch.no_grad():
+                det_rays_o = batch_rays_o.clone().detach().unsqueeze(-1)  # (N, 3, 1)
+                det_rays_d = batch_rays_d.clone().detach().unsqueeze(-1)  # (N, 3, 1)
+                # 't' is distance to closest boundary
+                t = (self.bound.unsqueeze(0).to(device)-det_rays_o)/det_rays_d
+                t, _ = torch.min(torch.max(t, dim=2)[0], dim=1)
+                inside_mask = t >= batch_gt_depth
+            batch_rays_d = batch_rays_d[inside_mask]
+            batch_rays_o = batch_rays_o[inside_mask]
+            batch_gt_depth = batch_gt_depth[inside_mask]
+            batch_gt_color = batch_gt_color[inside_mask]
 
         ret = self.renderer.render_batch_ray(
             self.c, self.decoders, batch_rays_d, batch_rays_o,  self.device, stage='color',  gt_depth=batch_gt_depth)
@@ -210,6 +211,8 @@ class Tracker(object):
 
                 camera_tensor = get_tensor_from_camera(
                     estimated_new_cam_c2w.detach())
+                if torch.any(torch.isnan(camera_tensor)):
+                        print('FOUND NAN CAM TENSOR')
                 if self.seperate_LR:
                     camera_tensor = camera_tensor.to(device).detach()
                     T = camera_tensor[-3:]
@@ -228,7 +231,7 @@ class Tracker(object):
                     cam_para_list = [camera_tensor]
                     optimizer_camera = torch.optim.Adam(
                         cam_para_list, lr=self.cam_lr)
-
+            
                 initial_loss_camera_tensor = torch.abs(
                     gt_camera_tensor.to(device)-camera_tensor).mean().item()
                 candidate_cam_tensor = None
@@ -239,10 +242,13 @@ class Tracker(object):
 
                     self.visualizer.vis(
                         idx, cam_iter, gt_depth, gt_color, camera_tensor, self.c, self.decoders)
-
+                    
                     loss = self.optimize_cam_in_batch(
                         camera_tensor, gt_color, gt_depth, self.tracking_pixels, optimizer_camera)
-
+                    
+                    if torch.any(torch.isnan(camera_tensor)):
+                        print('CAM TENSOR IS NAN')
+                    
                     if cam_iter == 0:
                         initial_loss = loss
 
@@ -256,6 +262,7 @@ class Tracker(object):
                     if loss < current_min_loss:
                         current_min_loss = loss
                         candidate_cam_tensor = camera_tensor.clone().detach()
+                        
                 bottom = torch.from_numpy(np.array([0, 0, 0, 1.]).reshape(
                     [1, 4])).type(torch.float32).to(self.device)
                 c2w = get_camera_from_tensor(

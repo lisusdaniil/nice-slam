@@ -309,7 +309,7 @@ class NICE(nn.Module):
         self.color_decoder = MLP(name='color', dim=dim, c_dim=c_dim, color=True,
                                  skips=[2], n_blocks=5, hidden_size=hidden_size,
                                  grid_len=color_grid_len, pos_embedding_method=pos_embedding_method)
-        self.bg_decoder = MLP(name='bg', dim=dim, c_dim=c_dim, color=True,
+        self.bg_decoder = MLP(name='sphere', dim=dim, c_dim=c_dim, color=True,
                                  skips=[2], n_blocks=5, hidden_size=hidden_size,
                                  grid_len=bg_grid_len, pos_embedding_method=pos_embedding_method)
         

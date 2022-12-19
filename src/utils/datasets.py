@@ -236,7 +236,7 @@ class TUM_RGBD(BaseDataset):
                  ):
         super(TUM_RGBD, self).__init__(cfg, args, scale, device)
         self.color_paths, self.depth_paths, self.poses = self.loadtum(
-            self.input_folder, frame_rate=32)
+            self.input_folder, frame_lims=cfg['frame_lims'], frame_rate=cfg['frame_rate'])
         self.n_img = len(self.color_paths)
 
     def parse_list(self, filepath, skiprows=0):
@@ -264,7 +264,7 @@ class TUM_RGBD(BaseDataset):
 
         return associations
 
-    def loadtum(self, datapath, frame_rate=-1):
+    def loadtum(self, datapath, frame_rate=-1,frame_lims=None):
         """ read video data in tum-rgbd format """
         if os.path.isfile(os.path.join(datapath, 'groundtruth.txt')):
             pose_list = os.path.join(datapath, 'groundtruth.txt')
@@ -291,7 +291,11 @@ class TUM_RGBD(BaseDataset):
             t1 = tstamp_image[associations[i][0]]
             if t1 - t0 > 1.0 / frame_rate:
                 indicies += [i]
-
+        # limit indices based on configuration
+        if not frame_lims is None and frame_lims[0] < len(indicies) \
+            and frame_lims[1] < len(indicies) :
+            indicies = indicies[frame_lims[0]:frame_lims[1]]
+        
         images, poses, depths, intrinsics = [], [], [], []
         inv_pose = None
         for ix in indicies:

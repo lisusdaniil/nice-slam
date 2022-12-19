@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from colorama import Fore, Style
 from torch.autograd import Variable
+import csv
 
 from src.common import (get_camera_from_tensor, get_samples,
                         get_tensor_from_camera, random_select)
@@ -42,7 +43,7 @@ class Mapper(object):
         self.decoders = slam.shared_decoders
         self.estimate_c2w_list = slam.estimate_c2w_list
         self.mapping_first_frame = slam.mapping_first_frame
-
+        self.color_loss = []
         self.scale = cfg['scale']
         self.coarse = cfg['coarse']
         self.occupancy = cfg['occupancy']
@@ -369,6 +370,8 @@ class Mapper(object):
             if not self.fix_color:
                 decoders_para_list += list(
                     self.decoders.color_decoder.parameters())
+                decoders_para_list += list(
+                    self.decoders.bg_decoder.parameters())
         else:
             # imap*, single MLP
             decoders_para_list += list(self.decoders.parameters())
@@ -546,6 +549,7 @@ class Mapper(object):
                     c, self.decoders, batch_rays_d, batch_rays_o, batch_gt_depth, device, self.stage)
                 regulation_loss = torch.abs(point_sigma).sum()
                 loss += 0.0005*regulation_loss
+            
             # run back-propagation to get gradients
             loss.backward(retain_graph=False)
             # run optimizer one step
@@ -565,7 +569,13 @@ class Mapper(object):
                         val = val.detach()
                         val[mask] = val_grad.clone().detach()
                         c[key] = val
-
+        # Store Color Loss
+        if 'color_loss' in locals():
+            self.color_loss.append(np.array(color_loss.cpu().detach()))
+        
+        if self.verbose:
+            print(f"Mapping Loss:   {loss}")
+                
         if self.BA:
             # put the updated camera poses back
             camera_tensor_id = 0
@@ -582,6 +592,8 @@ class Mapper(object):
                         camera_tensor_list[-1].detach())
                     c2w = torch.cat([c2w, bottom], dim=0)
                     cur_c2w = c2w.clone()
+                    
+            
         if self.BA:
             return cur_c2w
         else:
@@ -703,3 +715,8 @@ class Mapper(object):
 
             if idx == self.n_img-1:
                 break
+        # Store color loss:
+        file = f'{self.output}/colorLoss.csv'
+        with open(file, 'w', newline='') as myfile:
+            wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
+            wr.writerow(self.color_loss)

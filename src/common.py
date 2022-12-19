@@ -228,9 +228,9 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, bg
         torch.exp(-act_fn(raw)*dists)
     dists = z_vals[..., 1:] - z_vals[..., :-1]
     dists = dists.float()
-    dists = torch.cat([dists, torch.Tensor([1e10]).float().to(
-        device).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
-
+    # dists = torch.cat([dists, torch.Tensor([1e10]).float().to(
+    #     device).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
+    dists = torch.cat([dists, dists[:,-1].expand(1,-1).transpose(0,1)], -1)  # [N_rays, N_samples]
     # different ray angle corresponds to different unit length
     dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
     rgb = raw[..., :-1]
@@ -246,6 +246,7 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, bg
     # Foreground weighting
     weights_fg = alpha.float() * T_i[:, :-1] #(N_rays, N_samples)
     # Background weighting - transmittence only since background NeRF modeled as single color
+    # Use transmittence of last element.
     weights_bg = T_i[:,-1]
     # Mult weights by color
     rgb_map_fg = torch.sum(weights_fg[..., None] * rgb, -2)  # (N_rays, 3)

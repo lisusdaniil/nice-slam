@@ -69,6 +69,8 @@ class NICE_SLAM():
 
         self.frame_reader = get_dataset(cfg, args, self.scale)
         self.n_img = len(self.frame_reader)
+        # edit the number of frames here.
+        
         self.estimate_c2w_list = torch.zeros((self.n_img, 4, 4))
         self.estimate_c2w_list.share_memory_()
 

@@ -38,32 +38,30 @@ def main():
 
     cfg = config.load_config(
         args.config, 'configs/nice_slam.yaml' if args.nice else 'configs/imap.yaml')
-
-    slam = NICE_SLAM(cfg, args)
     
+    # turn on background
+    args.bg_sphr = True
+    slam = NICE_SLAM(cfg, args)
     
     # TEST BACKGROUND RENDERING
     
     device = 'cuda:0'
     # zero the sphere
-    grid_azi = torch.zeros_like(slam.shared_c['grid_sphere']).to(device)
-    grid_inc = torch.zeros_like(slam.shared_c['grid_sphere']).to(device)
+    grid = torch.zeros_like(slam.shared_c['grid_sphere']).to(device)
     # alternate on azimuth
     for i in range(slam.shared_c['grid_sphere'].shape[3]):
-        if i % 2 == 0:
-            grid_inc[:,:,:,i,:] = 1.
-        else:
-            grid_inc[:,:,:,i,:] = 0.
-            
-    for i in range(slam.shared_c['grid_sphere'].shape[4]):
-        if i % 2 == 0:
-            grid_azi[:,:,:,:,i] = 1.
-        
+        for j in range(slam.shared_c['grid_sphere'].shape[4]):
+            if i % 2 == 0 and j % 2 == 0:
+                grid[:,:,:,i,j] = 1.
+    
+    slam.shared_c['grid_sphere'] = grid
+
     
     # viewpoint
-    
-    angVals = np.linspace(0,np.pi, 5)
-    for ang in angVals:
+    nViews = 4
+    fig,axs = plt.subplots(2,2)
+    angVals = np.linspace(0,3*np.pi/4, nViews)
+    for i,ang in enumerate(angVals):
         R_wc = tr.roty(ang)
         t_cw_w = np.zeros((3,1))
         c2w = np.vstack((np.hstack((R_wc, t_cw_w)) , np.array([[0.,0.,0.,1.]])))
@@ -71,7 +69,6 @@ def main():
         print(c2w)
         c2w = torch.Tensor(c2w).to(device)
         # Render image
-        slam.shared_c['grid_sphere'] = grid_inc
         depth, uncertainty, color = slam.renderer.render_img(
         slam.shared_c,
         slam.shared_decoders,
@@ -80,29 +77,15 @@ def main():
         stage='color',
         bg_only=True)
         color_np = color.detach().cpu().numpy()
-        fig,axs = plt.subplots(1,2)
-        axs[0].imshow(color_np, cmap="plasma")
-        axs[0].set_title(f"inc change: center angle: {ang*180/np.pi} deg")
-        axs[0].set_xticks([])
-        axs[0].set_yticks([])
-        
-        # Render image
-        slam.shared_c['grid_sphere'] = grid_azi
-        depth, uncertainty, color = slam.renderer.render_img(
-        slam.shared_c,
-        slam.shared_decoders,
-        c2w,
-        device,
-        stage='color',
-        bg_only=True)
-        color_np = color.detach().cpu().numpy()
-
-        axs[1].imshow(color_np, cmap="plasma")
-        axs[1].set_title(f"azi change: center angle: {ang*180/np.pi} deg")
-        axs[1].set_xticks([])
-        axs[1].set_yticks([])
-        
-        plt.show()
+        a = i % 2
+        b = int(np.floor(i / 2))
+        print(f"{a},{b}")
+        axs[a,b].imshow(color_np, cmap="plasma")
+        axs[a,b].set_title(f"Camera Angle:\n{ang*180/np.pi} deg")
+        axs[a,b].set_xticks([])
+        axs[a,b].set_yticks([])
+    plt.tight_layout  
+    plt.show()
     
 if __name__ == '__main__':
     main()

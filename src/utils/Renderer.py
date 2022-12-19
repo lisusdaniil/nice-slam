@@ -1,6 +1,8 @@
 import torch
 from src.common import get_rays, raw2outputs_nerf_color, sample_pdf
 import numpy as np
+import torch.nn.functional as F
+
 
 class Renderer(object):
     def __init__(self, cfg, args, slam, points_batch_size=500000, ray_batch_size=100000):
@@ -17,6 +19,7 @@ class Renderer(object):
         self.occupancy = cfg['occupancy']
         self.nice = slam.nice
         self.bound = slam.bound
+        self.args = slam.args
 
         self.H, self.W, self.fx, self.fy, self.cx, self.cy = slam.H, slam.W, slam.fx, slam.fy, slam.cx, slam.cy
 
@@ -54,18 +57,23 @@ class Renderer(object):
                 ret = ret.squeeze(0)
                 if len(ret.shape) == 1 and ret.shape[0] == 4:
                     ret = ret.unsqueeze(0)
-                # Points outside boundary have full occupancy.
-                # ret[~mask, 3] = 100
-                # Points outside boundeary have zero occupancy
-                ret[~mask,3] = 0
+                if not self.args.bg_sphr:
+                    # Points outside boundary have full occupancy.
+                    ret[~mask, 3] = 100
+                else:
+                    # Points outside boundeary have zero occupancy
+                    ret[~mask,3] = 0
             else:
-                # Test with no NeRF decoding, just background color
-                ret = decoders.bg_decoder.sample_grid_feature(pi,c['grid_sphere'])
-                # just use the first 4 values of the feature
-                ret = ret.squeeze(0)[:4,:].transpose(0,1)
+                # # Test with no NeRF decoding, just background color
+                # ret = decoders.bg_decoder.sample_grid_feature(pi,c['grid_sphere'])
+                # # just use the first 4 values of the feature
+                # ret = ret.squeeze(0)[:4,:].transpose(0,1)
+                ret = decoders.bg_decoder(pi,c)
             rets.append(ret)
-
+            
         ret = torch.cat(rets, dim=0)
+        if torch.any(torch.isnan(ret)):
+            print('EVAL RETURNS NAN')
         return ret
 
     def render_batch_ray(self, c, decoders, rays_d, rays_o, device, stage, gt_depth=None, bg_only=False):
@@ -192,10 +200,8 @@ class Renderer(object):
         raw = self.eval_points(pointsf, decoders, c, stage, device)
         raw = raw.reshape(N_rays, N_samples+N_surface, -1)
         
-        # if using background sphere, evaluate ray points
-        # Note: here we are temporarily hijacking the color grid inputs to update 
-        # the sphere grid voxels (actually pixels)
-        if 'grid_sphere' in c.keys():
+        # if using background sphere and we are at the color stage, evaluate the color points at background
+        if 'grid_sphere' in c.keys() and stage == 'color':
             # Normalize rays
             rays_d = torch.nn.functional.normalize(rays_d)
             # Generate points from ray directions
@@ -211,6 +217,7 @@ class Renderer(object):
             raw_bg = None
         depth, uncertainty, color, weights = raw2outputs_nerf_color(
             raw, z_vals, rays_d, raw_bg=raw_bg, occupancy=self.occupancy, device=device,bg_only=bg_only)
+        
         if N_importance > 0:
             print("what does this do???????????")
             z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
