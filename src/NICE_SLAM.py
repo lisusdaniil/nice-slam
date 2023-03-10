@@ -37,6 +37,10 @@ class NICE_SLAM():
         self.coarse_bound_enlarge = cfg['model']['coarse_bound_enlarge']
         if args.output is None:
             self.output = cfg['data']['output']
+            if args.imu:
+                self.output = self.output + '_imu'
+            elif args.dep_u:
+                self.output = self.output + '_dep_u'
         else:
             self.output = args.output
         self.ckptsdir = os.path.join(self.output, 'ckpts')
@@ -69,7 +73,15 @@ class NICE_SLAM():
         self.n_img = len(self.frame_reader)
         self.estimate_c2w_list = torch.zeros((self.n_img, 4, 4))
         self.estimate_c2w_list.share_memory_()
-
+        num_RMI = int(self.n_img/cfg['mapping']['keyframe_every']+10)
+        self.RMI_list = torch.zeros((num_RMI, 4, 4))
+        self.tmp_RMI = torch.zeros((2*cfg['mapping']['keyframe_every'], 4, 4))
+        self.RMI_cov_list = torch.zeros((num_RMI, 6, 6))
+        self.tmp_RMI_cov =torch.zeros((2*cfg['mapping']['keyframe_every'], 6, 6))
+        self.RMI_list.share_memory_()
+        self.RMI_cov_list.share_memory_()
+        self.tmp_RMI.share_memory_()
+        self.tmp_RMI_cov.share_memory_()
         self.gt_c2w_list = torch.zeros((self.n_img, 4, 4))
         self.gt_c2w_list.share_memory_()
         self.idx = torch.zeros((1)).int()

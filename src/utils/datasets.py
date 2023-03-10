@@ -71,6 +71,23 @@ class BaseDataset(Dataset):
 
         self.crop_edge = cfg['cam']['crop_edge']
 
+        # Only try to load imu data if imu usage desired
+        if hasattr(args, 'imu'):
+            if args.imu:
+                self.imu_data = self.get_imu_data()
+            else:
+                self.imu_data = []
+
+    def get_imu_data(self):
+        imu_data_path = os.path.join(self.input_folder, 'imu')
+        # If IMU file exists, load in data, otherwise return nothing
+        if os.path.exists(imu_data_path):
+            imu_data = torch.load(imu_data_path + '/imu_data')
+            return imu_data
+        else:
+            print("No IMU file found")
+            return []
+
     def __len__(self):
         return self.n_img
 
@@ -110,7 +127,26 @@ class BaseDataset(Dataset):
             depth_data = depth_data[edge:-edge, edge:-edge]
         pose = self.poses[index]
         pose[:3, 3] *= self.scale
-        return index, color_data.to(self.device), depth_data.to(self.device), pose.to(self.device)
+
+        # If IMU data available, load it in
+        imu = []
+        if self.imu_data:
+            # Want the data for current frame to be about change from last to curr frame
+            # Thus, load in index-1
+            if index > 0:
+                gyro_idx = self.imu_data['gyro'][index-1,:]
+                vel_idx = self.imu_data['vel'][index-1,:]
+                dt_idx = self.imu_data['dt'][index-1]
+
+                # Add fudge factor if std is zero
+                vel_std = max(0.0001, self.imu_data['vel_std'])
+                gyro_std = max(0.0001, self.imu_data['gyro_std'])
+
+                # Save dict for single index
+                imu = {'vel': vel_idx, 'gyro': gyro_idx, 'dt': dt_idx, 'vel_std': vel_std, 'gyro_std': gyro_std}
+            else:
+                imu = {}
+        return index, color_data.to(self.device), depth_data.to(self.device), pose.to(self.device), imu
 
 
 class Replica(BaseDataset):
@@ -194,6 +230,7 @@ class ScanNet(BaseDataset):
         self.poses = []
         pose_paths = sorted(glob.glob(os.path.join(path, '*.txt')),
                             key=lambda x: int(os.path.basename(x)[:-4]))
+        
         for pose_path in pose_paths:
             with open(pose_path, "r") as f:
                 lines = f.readlines()
