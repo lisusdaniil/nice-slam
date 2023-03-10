@@ -146,7 +146,8 @@ class Visualizer(object):
                     plt.savefig(
                         f'{directory}{idx:05d}_{iter:04d}_bg.jpg', bbox_inches='tight', pad_inches=0.2)
                     plt.clf()  
-
+                    # Close all figures
+                    plt.close('all')
                 if self.verbose:
                     print(
                         f'Saved rendering visualization of color/depth image at {self.vis_dir}/{idx:05d}_{iter:04d}.jpg')
