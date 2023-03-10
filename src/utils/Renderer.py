@@ -1,5 +1,7 @@
 import torch
 from src.common import get_rays, raw2outputs_nerf_color, sample_pdf
+import numpy as np
+import torch.nn.functional as F
 
 
 class Renderer(object):
@@ -17,10 +19,11 @@ class Renderer(object):
         self.occupancy = cfg['occupancy']
         self.nice = slam.nice
         self.bound = slam.bound
+        self.args = slam.args
 
         self.H, self.W, self.fx, self.fy, self.cx, self.cy = slam.H, slam.W, slam.fx, slam.fy, slam.cx, slam.cy
 
-    def eval_points(self, p, decoders, c=None, stage='color', device='cuda:0'):
+    def eval_points(self, p, decoders, c=None, stage='color', device='cuda:0',bg=False):
         """
         Evaluates the occupancy and/or color value for the points.
 
@@ -30,6 +33,7 @@ class Renderer(object):
             c (dicts, optional): Feature grids. Defaults to None.
             stage (str, optional): Query stage, corresponds to different levels. Defaults to 'color'.
             device (str, optional): CUDA device. Defaults to 'cuda:0'.
+            bg(bool,optional): Indicates that we are evaluating points in the background
 
         Returns:
             ret (tensor): occupancy (and color) value of input points.
@@ -39,28 +43,40 @@ class Renderer(object):
         bound = self.bound
         rets = []
         for pi in p_split:
-            # mask for points out of bound
-            mask_x = (pi[:, 0] < bound[0][1]) & (pi[:, 0] > bound[0][0])
-            mask_y = (pi[:, 1] < bound[1][1]) & (pi[:, 1] > bound[1][0])
-            mask_z = (pi[:, 2] < bound[2][1]) & (pi[:, 2] > bound[2][0])
-            mask = mask_x & mask_y & mask_z
-
-            pi = pi.unsqueeze(0)
-            if self.nice:
-                ret = decoders(pi, c_grid=c, stage=stage)
+            if not bg:
+                # mask = true for points inside the boundaries
+                mask_x = (pi[:, 0] < bound[0][1]) & (pi[:, 0] > bound[0][0])
+                mask_y = (pi[:, 1] < bound[1][1]) & (pi[:, 1] > bound[1][0])
+                mask_z = (pi[:, 2] < bound[2][1]) & (pi[:, 2] > bound[2][0])
+                mask = mask_x & mask_y & mask_z
+                pi = pi.unsqueeze(0)
+                if self.nice:
+                    ret = decoders(pi, c_grid=c, stage=stage)
+                else:
+                    ret = decoders(pi, c_grid=None)
+                ret = ret.squeeze(0)
+                if len(ret.shape) == 1 and ret.shape[0] == 4:
+                    ret = ret.unsqueeze(0)
+                if not self.args.bg_sphr:
+                    # Points outside boundary have full occupancy.
+                    ret[~mask, 3] = 100
+                else:
+                    # Points outside boundeary have zero occupancy
+                    ret[~mask,3] = 0
             else:
-                ret = decoders(pi, c_grid=None)
-            ret = ret.squeeze(0)
-            if len(ret.shape) == 1 and ret.shape[0] == 4:
-                ret = ret.unsqueeze(0)
-
-            ret[~mask, 3] = 100
+                # # Test with no NeRF decoding, just background color
+                # ret = decoders.bg_decoder.sample_grid_feature(pi,c['grid_sphere'])
+                # # just use the first 4 values of the feature
+                # ret = ret.squeeze(0)[:4,:].transpose(0,1)
+                ret = decoders.bg_decoder(pi,c)
             rets.append(ret)
-
+            
         ret = torch.cat(rets, dim=0)
+        if torch.any(torch.isnan(ret)):
+            print('EVAL RETURNS NAN')
         return ret
 
-    def render_batch_ray(self, c, decoders, rays_d, rays_o, device, stage, gt_depth=None):
+    def render_batch_ray(self, c, decoders, rays_d, rays_o, device, stage, gt_depth=None, bg_only=False):
         """
         Render color, depth and uncertainty of a batch of rays.
 
@@ -72,6 +88,7 @@ class Renderer(object):
             device (str): device name to compute on.
             stage (str): query stage.
             gt_depth (tensor, optional): sensor depth image. Defaults to None.
+            bg_only (bool, optional): Render background values only
 
         Returns:
             depth (tensor): rendered depth.
@@ -94,7 +111,7 @@ class Renderer(object):
             gt_depth = gt_depth.reshape(-1, 1)
             gt_depth_samples = gt_depth.repeat(1, N_samples)
             near = gt_depth_samples*0.01
-
+        
         with torch.no_grad():
             det_rays_o = rays_o.clone().detach().unsqueeze(-1)  # (N, 3, 1)
             det_rays_d = rays_d.clone().detach().unsqueeze(-1)  # (N, 3, 1)
@@ -174,16 +191,35 @@ class Renderer(object):
             z_vals, _ = torch.sort(
                 torch.cat([z_vals, z_vals_surface.double()], -1), -1)
 
+        # Generate sets of points for each ray by multiplying ray direction by sample depths
         pts = rays_o[..., None, :] + rays_d[..., None, :] * \
             z_vals[..., :, None]  # [N_rays, N_samples+N_surface, 3]
         pointsf = pts.reshape(-1, 3)
 
+        # evaluate points using networks
         raw = self.eval_points(pointsf, decoders, c, stage, device)
         raw = raw.reshape(N_rays, N_samples+N_surface, -1)
-
+        
+        # if using background sphere and we are at the color stage, evaluate the color points at background
+        if 'grid_sphere' in c.keys() and stage == 'color':
+            # Normalize rays
+            rays_d = torch.nn.functional.normalize(rays_d)
+            # Generate points from ray directions
+            polar = torch.acos(rays_d[:,2])
+            azim = torch.sign(rays_d[:,1]) * torch.acos(rays_d[:,0] /
+                            torch.linalg.vector_norm(rays_d[:,:2],dim=1) ) 
+            # wrap points around so that they are defined between 0 and 2pi
+            azim = torch.remainder(azim, 2*np.pi)
+            pointsf = torch.stack([azim, polar, torch.ones_like(azim)],dim=1)
+            # evaluate points using networks
+            raw_bg = self.eval_points(pointsf, decoders, c, stage, device,bg=True)
+        else:
+            raw_bg = None
         depth, uncertainty, color, weights = raw2outputs_nerf_color(
-            raw, z_vals, rays_d, occupancy=self.occupancy, device=device)
+            raw, z_vals, rays_d, raw_bg=raw_bg, occupancy=self.occupancy, device=device,bg_only=bg_only)
+        
         if N_importance > 0:
+            print("what does this do???????????")
             z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
             z_samples = sample_pdf(
                 z_vals_mid, weights[..., 1:-1], N_importance, det=(self.perturb == 0.), device=device)
@@ -202,7 +238,7 @@ class Renderer(object):
 
         return depth, uncertainty, color
 
-    def render_img(self, c, decoders, c2w, device, stage, gt_depth=None):
+    def render_img(self, c, decoders, c2w, device, stage, gt_depth=None, bg_only=False):
         """
         Renders out depth, uncertainty, and color images.
 
@@ -213,6 +249,7 @@ class Renderer(object):
             device (str): device name to compute on.
             stage (str): query stage.
             gt_depth (tensor, optional): sensor depth image. Defaults to None.
+            bg_only (bool, optional): Render only the background sphere for the image
 
         Returns:
             depth (tensor, H*W): rendered depth image.
@@ -232,18 +269,19 @@ class Renderer(object):
             color_list = []
 
             ray_batch_size = self.ray_batch_size
-            gt_depth = gt_depth.reshape(-1)
+            if not gt_depth is None:
+                gt_depth = gt_depth.reshape(-1)
 
             for i in range(0, rays_d.shape[0], ray_batch_size):
                 rays_d_batch = rays_d[i:i+ray_batch_size]
                 rays_o_batch = rays_o[i:i+ray_batch_size]
                 if gt_depth is None:
                     ret = self.render_batch_ray(
-                        c, decoders, rays_d_batch, rays_o_batch, device, stage, gt_depth=None)
+                        c, decoders, rays_d_batch, rays_o_batch, device, stage, gt_depth=None,bg_only=bg_only)
                 else:
                     gt_depth_batch = gt_depth[i:i+ray_batch_size]
                     ret = self.render_batch_ray(
-                        c, decoders, rays_d_batch, rays_o_batch, device, stage, gt_depth=gt_depth_batch)
+                        c, decoders, rays_d_batch, rays_o_batch, device, stage, gt_depth=gt_depth_batch,bg_only=bg_only)
 
                 depth, uncertainty, color = ret
                 depth_list.append(depth.double())

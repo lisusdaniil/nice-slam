@@ -78,7 +78,7 @@ def get_rays_from_uv(i, j, c2w, H, W, fx, fy, cx, cy, device):
     """
     if isinstance(c2w, np.ndarray):
         c2w = torch.from_numpy(c2w).to(device)
-
+    # Note that z-axis is defined "front-to-back"
     dirs = torch.stack(
         [(i-cx)/fx, -(j-cy)/fy, -torch.ones_like(i)], -1).to(device)
     dirs = dirs.reshape(-1, 1, 3)
@@ -128,8 +128,10 @@ def get_samples(H0, H1, W0, W1, n, H, W, fx, fy, cx, cy, c2w, depth, color, devi
     c2w is its camera pose and depth/color is the corresponding image tensor.
 
     """
+    # Sample pixels from image
     i, j, sample_depth, sample_color = get_sample_uv(
         H0, H1, W0, W1, n, depth, color, device=device)
+    # For those samples, get corresponding rays (origin and direction)
     rays_o, rays_d = get_rays_from_uv(i, j, c2w, H, W, fx, fy, cx, cy, device)
     return rays_o, rays_d, sample_depth, sample_color
 
@@ -201,15 +203,18 @@ def get_tensor_from_camera(RT, Tquad=False):
     return tensor
 
 
-def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, device='cuda:0'):
+def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, raw_bg=None, bg_only=False, device='cuda:0'):
     """
     Transforms model's predictions to semantically meaningful values.
 
     Args:
         raw (tensor, N_rays*N_samples*4): prediction from model.
+        *** need to add input for background. ***
         z_vals (tensor, N_rays*N_samples): integration time.
         rays_d (tensor, N_rays*3): direction of each ray.
         occupancy (bool, optional): occupancy or volume density. Defaults to False.
+        rgb_bg (tensor, N_rays*3) : background color. Defaults to 0.
+        bg_only (bool, optional) : if true renders background values only 
         device (str, optional): device. Defaults to 'cuda:0'.
 
     Returns:
@@ -223,9 +228,9 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, device='cuda:0'
         torch.exp(-act_fn(raw)*dists)
     dists = z_vals[..., 1:] - z_vals[..., :-1]
     dists = dists.float()
-    dists = torch.cat([dists, torch.Tensor([1e10]).float().to(
-        device).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
-
+    # dists = torch.cat([dists, torch.Tensor([1e10]).float().to(
+    #     device).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
+    dists = torch.cat([dists, dists[:,-1].expand(1,-1).transpose(0,1)], -1)  # [N_rays, N_samples]
     # different ray angle corresponds to different unit length
     dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
     rgb = raw[..., :-1]
@@ -235,14 +240,32 @@ def raw2outputs_nerf_color(raw, z_vals, rays_d, occupancy=False, device='cuda:0'
     else:
         # original nerf, volume density
         alpha = raw2alpha(raw[..., -1], dists)  # (N_rays, N_samples)
-
-    weights = alpha.float() * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).to(
-        device).float(), (1.-alpha + 1e-10).float()], -1).float(), -1)[:, :-1]
-    rgb_map = torch.sum(weights[..., None] * rgb, -2)  # (N_rays, 3)
-    depth_map = torch.sum(weights * z_vals, -1)  # (N_rays)
+    # Get cumulative weights along rays
+    T_i = torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).to(
+        device).float(), (1.-alpha + 1e-10).float()], -1).float(), -1)
+    # Foreground weighting
+    weights_fg = alpha.float() * T_i[:, :-1] #(N_rays, N_samples)
+    # Background weighting - transmittence only since background NeRF modeled as single color
+    # Use transmittence of last element.
+    weights_bg = T_i[:,-1]
+    # Mult weights by color
+    rgb_map_fg = torch.sum(weights_fg[..., None] * rgb, -2)  # (N_rays, 3)
+    # if background is populated then get colors
+    if raw_bg == None:
+        rgb_map_bg = 0.
+    else:
+        rgb_bg = raw_bg[..., :-1]
+        rgb_map_bg = weights_bg[:,None] * rgb_bg # (N_rays, 3)
+    # combine foregrnd and backgrnd
+    if bg_only:
+        rgb_map = rgb_bg
+    else:
+        rgb_map = rgb_map_fg + rgb_map_bg
+    # Depth map
+    depth_map = torch.sum(weights_fg * z_vals, -1)  # (N_rays)
     tmp = (z_vals-depth_map.unsqueeze(-1))  # (N_rays, N_samples)
-    depth_var = torch.sum(weights*tmp*tmp, dim=1)  # (N_rays)
-    return depth_map, depth_var, rgb_map, weights
+    depth_var = torch.sum(weights_fg*tmp*tmp, dim=1)  # (N_rays)
+    return depth_map, depth_var, rgb_map, weights_fg
 
 
 def get_rays(H, W, fx, fy, cx, cy, c2w, device):

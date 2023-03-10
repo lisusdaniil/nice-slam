@@ -1,7 +1,9 @@
+frame_lims: [0, 100]
+frame_rate: 10
 coarse: True
 sync_method: strict
 scale: 1
-verbose: True
+verbose: False
 occupancy: True
 low_gpu_mem: True
 grid_len:
@@ -9,6 +11,7 @@ grid_len:
   middle: 0.32 
   fine: 0.16
   color: 0.16
+  bg: 0.02
   bound_divisible: 0.32
 pretrained_decoders:
   coarse: pretrained/coarse.pt
@@ -75,24 +78,29 @@ mapping:
       middle_lr: 0.0
       fine_lr: 0.0
       color_lr: 0.0
+      sphere_lr: 0.0
     middle:
       decoders_lr: 0.0
       coarse_lr: 0.0
       middle_lr: 0.1
       fine_lr: 0.0
       color_lr: 0.0
+      sphere_lr: 0.0
     fine:
       decoders_lr: 0.0
       coarse_lr: 0.0
       middle_lr: 0.005
       fine_lr: 0.005
       color_lr: 0.0
+      sphere_lr: 0.0
     color:
       decoders_lr: 0.005
       coarse_lr: 0.0
       middle_lr: 0.005
       fine_lr: 0.005
       color_lr: 0.005
+      sphere_lr: 0.005
+      
 cam:
   H: 680
   W: 1200
