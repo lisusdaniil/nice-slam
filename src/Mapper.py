@@ -45,6 +45,7 @@ class Mapper(object):
         self.estimate_c2w_list = slam.estimate_c2w_list
         self.gt_c2w_list = slam.gt_c2w_list
         self.mapping_first_frame = slam.mapping_first_frame
+        self.depth_loss = []
         self.color_loss = []
         self.RMI_list = slam.RMI_list
         self.RMI_cov_list = slam.RMI_cov_list
@@ -643,9 +644,14 @@ class Mapper(object):
             depth_mask = (batch_gt_depth > 0)
             # Construct depth losses
             if self.args.dep_u:
-                loss = torch.div(torch.abs(batch_gt_depth[depth_mask]-depth[depth_mask]), batch_gt_depth[depth_mask]*(0.0029)).sum()
+                # Replica depth uncertainty
+                #loss = torch.div(torch.abs(batch_gt_depth[depth_mask]-depth[depth_mask]), batch_gt_depth[depth_mask]*(0.0029)).sum()
+                # TUM depth uncertainty
+                loss = torch.div(torch.abs(batch_gt_depth[depth_mask]-depth[depth_mask]), batch_gt_depth[depth_mask]*(0.01)).sum()
             else:
                 loss = torch.abs(batch_gt_depth[depth_mask]-depth[depth_mask]).sum()
+            # Save depth loss
+            depth_loss = torch.abs(batch_gt_depth[depth_mask]-depth[depth_mask]).sum()
             # Construct color losses
             if ((not self.nice) or (self.stage == 'color')):
                 color_loss = torch.abs(batch_gt_color - color).sum()
@@ -689,9 +695,10 @@ class Mapper(object):
         # Store Color Loss
         if 'color_loss' in locals():
             self.color_loss.append(np.array(color_loss.cpu().detach()))
+            self.depth_loss.append(np.array(depth_loss.cpu().detach()))
         
         if self.verbose:
-            print(f"Mapping Loss:   {loss}")
+            print(f"Mapping Loss: {loss}")
                 
         if self.BA:
             # put the updated camera poses back
@@ -710,7 +717,6 @@ class Mapper(object):
                     c2w = torch.cat([c2w, bottom], dim=0)
                     cur_c2w = c2w.clone()
                     
-            
         if self.BA:
             return cur_c2w
         else:
@@ -837,3 +843,4 @@ class Mapper(object):
         with open(file, 'w', newline='') as myfile:
             wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
             wr.writerow(self.color_loss)
+            wr.writerow(self.depth_loss)

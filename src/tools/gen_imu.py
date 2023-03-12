@@ -15,17 +15,22 @@ def setup_seed(seed):
     random.seed(seed)
 
 def gen_imu(cfg, args):
-    # Arbitrarily set dt since we have no timesteps anywhere
-    dt = 0.1
-
     # Load in dataset with gt poses
     dtset = get_dataset(cfg, args, cfg['scale'])
+
+    # Arbitrarily set dt since we have no timesteps anywhere
+    dt = 0.01
+    dt_list = dt * torch.ones(dtset.n_img-1)
 
     # Initialize measurement vectors
     gyro_meas = torch.zeros((dtset.n_img-1, 3))
     vel_meas = torch.zeros((dtset.n_img-1, 3))
 
     for ii in range(0, dtset.n_img-1):
+        if dtset.timestamps is not None:
+            dt = dtset.timestamps[ii+1] - dtset.timestamps[ii]
+            dt_list[ii] = dt
+
         # Get current state
         c2w_ii = dtset.poses[ii]
         C_ab_ii = SO3.from_matrix(c2w_ii[0:3, 0:3], normalize=True)
@@ -48,10 +53,7 @@ def gen_imu(cfg, args):
     # Add noise
     vel_meas = vel_meas + np.random.multivariate_normal(np.zeros(3), args.vel_noise*np.eye(3), dtset.n_img-1)
     gyro_meas = gyro_meas + np.random.multivariate_normal(np.zeros(3), args.gyro_noise*np.eye(3), dtset.n_img-1)
-    
-    # Save dt's
-    dt_list = dt * torch.ones(dtset.n_img-1)
-    
+
     # Save all data in imu dict
     imu_data = {'vel': vel_meas, 'gyro': gyro_meas, 'dt': dt_list, 'vel_std': args.vel_noise, 'gyro_std': args.gyro_noise}
 

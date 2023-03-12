@@ -159,6 +159,7 @@ class Replica(BaseDataset):
             glob.glob(f'{self.input_folder}/results/depth*.png'))
         self.n_img = len(self.color_paths)
         self.load_poses(f'{self.input_folder}/traj.txt')
+        self.timestamps = None
 
     def load_poses(self, path):
         self.poses = []
@@ -225,6 +226,7 @@ class ScanNet(BaseDataset):
             self.input_folder, 'depth', '*.png')), key=lambda x: int(os.path.basename(x)[:-4]))
         self.load_poses(os.path.join(self.input_folder, 'pose'))
         self.n_img = len(self.color_paths)
+        self.timestamps = None
 
     def load_poses(self, path):
         self.poses = []
@@ -272,7 +274,7 @@ class TUM_RGBD(BaseDataset):
     def __init__(self, cfg, args, scale, device='cuda:0'
                  ):
         super(TUM_RGBD, self).__init__(cfg, args, scale, device)
-        self.color_paths, self.depth_paths, self.poses = self.loadtum(
+        self.color_paths, self.depth_paths, self.poses, self.timestamps = self.loadtum(
             self.input_folder, frame_lims=cfg['frame_lims'], frame_rate=cfg['frame_rate'])
         self.n_img = len(self.color_paths)
 
@@ -319,6 +321,7 @@ class TUM_RGBD(BaseDataset):
         tstamp_image = image_data[:, 0].astype(np.float64)
         tstamp_depth = depth_data[:, 0].astype(np.float64)
         tstamp_pose = pose_data[:, 0].astype(np.float64)
+
         associations = self.associate_frames(
             tstamp_image, tstamp_depth, tstamp_pose)
 
@@ -332,8 +335,7 @@ class TUM_RGBD(BaseDataset):
         if not frame_lims is None and frame_lims[0] < len(indicies) \
             and frame_lims[1] < len(indicies) :
             indicies = indicies[frame_lims[0]:frame_lims[1]]
-        
-        images, poses, depths, intrinsics = [], [], [], []
+        images, poses, depths, intrinsics, timestamps = [], [], [], [], []
         inv_pose = None
         for ix in indicies:
             (i, j, k) = associations[ix]
@@ -350,7 +352,9 @@ class TUM_RGBD(BaseDataset):
             c2w = torch.from_numpy(c2w).float()
             poses += [c2w]
 
-        return images, depths, poses
+            timestamps += [tstamp_pose[k]]
+
+        return images, depths, poses, timestamps
 
     def pose_matrix_from_quaternion(self, pvec):
         """ convert 4x4 pose matrix to (t, q) """

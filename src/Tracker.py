@@ -121,8 +121,12 @@ class Tracker(object):
         else:
             mask = batch_gt_depth > 0
         if self.args.dep_u:
+            # Replica depth uncertainty
+            #loss = (torch.abs(batch_gt_depth-depth) /
+            #        torch.sqrt(uncertainty+1e-10 + torch.square(batch_gt_depth*0.0029)))[mask].sum()
+            # TUM depth uncertainty
             loss = (torch.abs(batch_gt_depth-depth) /
-                    torch.sqrt(uncertainty+1e-10 + torch.square(batch_gt_depth*0.0029)))[mask].sum()
+                    torch.sqrt(uncertainty+1e-10 + torch.square(batch_gt_depth*0.01)))[mask].sum()
         else:
             loss = (torch.abs(batch_gt_depth-depth) /
                     torch.sqrt(uncertainty+1e-10))[mask].sum()
@@ -168,7 +172,12 @@ class Tracker(object):
             # Add up overall imu loss (my dimension handling is garbage, hence [0])
             imu_loss = loss_C[0] + loss_r[0]
             w_imu_loss = 1
+            #print("")
+            #print('IMU loss: ', imu_loss)
+            #print('Other loss: ', loss)
+            #print("")
             loss += w_imu_loss * imu_loss
+            #loss = imu_loss
 
         loss.backward()
         optimizer.step()

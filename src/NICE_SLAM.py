@@ -38,9 +38,9 @@ class NICE_SLAM():
         if args.output is None:
             self.output = cfg['data']['output']
             if args.imu:
-                self.output = self.output + '_imu'
-            elif args.dep_u:
-                self.output = self.output + '_dep_u'
+                self.output += '_imu'
+            if args.dep_u:
+                self.output += '_dep_u'
         else:
             self.output = args.output
         if args.bg_sphr:
