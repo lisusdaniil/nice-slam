@@ -3,6 +3,14 @@ from src.common import get_rays, raw2outputs_nerf_color, sample_pdf
 import numpy as np
 import torch.nn.functional as F
 
+# Logging 
+import logging
+logger = logging.getLogger(__name__)
+# logger.setLevel(logging.DEBUG)
+file_handler = logging.FileHandler('Renderer.log')
+formatter    = logging.Formatter('%(asctime)s : %(levelname)s : %(name)s : %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
 class Renderer(object):
     def __init__(self, cfg, args, slam, points_batch_size=500000, ray_batch_size=100000):
@@ -64,16 +72,13 @@ class Renderer(object):
                     # Points outside boundeary have zero occupancy
                     ret[~mask,3] = 0
             else:
-                # # Test with no NeRF decoding, just background color
-                # ret = decoders.bg_decoder.sample_grid_feature(pi,c['grid_sphere'])
-                # # just use the first 4 values of the feature
-                # ret = ret.squeeze(0)[:4,:].transpose(0,1)
+                # Run background decoder in input point
                 ret = decoders.bg_decoder(pi,c)
             rets.append(ret)
             
         ret = torch.cat(rets, dim=0)
         if torch.any(torch.isnan(ret)):
-            print('EVAL RETURNS NAN')
+            logger.warning('Background decoder eval returns NAN')
         return ret
 
     def render_batch_ray(self, c, decoders, rays_d, rays_o, device, stage, gt_depth=None, bg_only=False):
@@ -126,8 +131,7 @@ class Renderer(object):
             try:
                 max_dep = torch.max(gt_depth*1.2)
             except RuntimeError:
-                print(gt_depth)
-                print(torch.max(gt_depth*1.2))
+                logger.error("No points within masked area")
             far = torch.clamp(far_bb, 0,  )
         else:
             far = far_bb
@@ -204,19 +208,36 @@ class Renderer(object):
         if 'grid_sphere' in c.keys() and stage == 'color':
             # Normalize rays
             rays_d = torch.nn.functional.normalize(rays_d)
+            # Clamp the ray vectors between -1 and 1 with a tolerance to deal with numerical issues
+            tol = 1e-7
+            rays_d = torch.clamp(rays_d,-1+tol, 1-tol)
+            x_frac = rays_d[:,0] /torch.linalg.vector_norm(rays_d[:,:2],dim=1)
+            x_frac = torch.clamp(x_frac, -1+tol, 1-tol)
             # Generate points from ray directions
             polar = torch.acos(rays_d[:,2])
-            azim = torch.sign(rays_d[:,1]) * torch.acos(rays_d[:,0] /
-                            torch.linalg.vector_norm(rays_d[:,:2],dim=1) ) 
+            azim = torch.sign(rays_d[:,1]) * torch.acos(x_frac)
             # wrap points around so that they are defined between 0 and 2pi
             azim = torch.remainder(azim, 2*np.pi)
             pointsf = torch.stack([azim, polar, torch.ones_like(azim)],dim=1)
+            if torch.any(torch.any(torch.isnan(pointsf))):
+                logger.debug("NAN points found")
+                logger.debug(pointsf)
             # evaluate points using networks
             raw_bg = self.eval_points(pointsf, decoders, c, stage, device,bg=True)
+            if torch.any(torch.isnan(raw_bg)):
+                logger.debug("NAN raw bg found")
+                logger.debug(raw_bg)
+            
         else:
             raw_bg = None
+        
+            
         depth, uncertainty, color, weights = raw2outputs_nerf_color(
             raw, z_vals, rays_d, raw_bg=raw_bg, occupancy=self.occupancy, device=device,bg_only=bg_only)
+        
+        if torch.any(torch.isnan(color)):
+            logger.debug("NAN color found")
+            logger.debug(color)
         
         if N_importance > 0:
             print("what does this do???????????")

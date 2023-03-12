@@ -16,7 +16,7 @@ tracking:
   vis_inside_freq: 1000
   pixels: 200
   seperate_LR: False
-  gt_camera : True
+  gt_camera : False
 data:
   input_folder: Datasets/TUM_RGBD/rgbd_dataset_freiburg2_rpy
   output: output/TUM_RGBD/rgbd_dataset_freiburg2_rpy
