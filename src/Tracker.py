@@ -15,6 +15,15 @@ from src.utils.datasets import get_dataset
 from src.utils.Visualizer import Visualizer
 from liegroups.torch import SO3
 
+# Logging 
+import logging
+logger = logging.getLogger(__name__)
+# logger.setLevel(logging.DEBUG)
+file_handler = logging.FileHandler('Tracker.log')
+formatter    = logging.Formatter('%(asctime)s : %(levelname)s : %(name)s : %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
 class Tracker(object):
     def __init__(self, cfg, args, slam
                  ):
@@ -96,6 +105,7 @@ class Tracker(object):
         Hedge = self.ignore_edge_H
         batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(
             Hedge, H-Hedge, Wedge, W-Wedge, batch_size, H, W, fx, fy, cx, cy, c2w, gt_depth, gt_color, self.device)
+        
         if self.nice: 
             # should pre-filter those out of bounding box depth value
             with torch.no_grad():
@@ -109,11 +119,9 @@ class Tracker(object):
             batch_rays_o = batch_rays_o[inside_mask]
             batch_gt_depth = batch_gt_depth[inside_mask]
             batch_gt_color = batch_gt_color[inside_mask]
-
         ret = self.renderer.render_batch_ray(
             self.c, self.decoders, batch_rays_d, batch_rays_o,  self.device, stage='color',  gt_depth=batch_gt_depth)
-        depth, uncertainty, color = ret
-
+        depth, uncertainty, color = ret            
         uncertainty = uncertainty.detach()
         if self.handle_dynamic:
             tmp = torch.abs(batch_gt_depth-depth)/torch.sqrt(uncertainty+1e-10)
@@ -130,6 +138,7 @@ class Tracker(object):
         if self.use_color_in_tracking:
             color_loss = torch.abs(
                 batch_gt_color - color)[mask].sum()
+            logger.debug(f"Tracking Color Loss: {color_loss}")
             loss += self.w_color_loss*color_loss
 
         # If using IMU, add in loss associated with current frame pose relative to prev frame pose
@@ -170,8 +179,18 @@ class Tracker(object):
             w_imu_loss = 1
             loss += w_imu_loss * imu_loss
 
-        loss.backward()
-        optimizer.step()
+        if self.args.DEBUG:
+            c2w.retain_grad()
+            batch_rays_o.retain_grad()
+            batch_rays_d.retain_grad()
+            depth.retain_grad()
+            color.retain_grad()
+            cam_prev = camera_tensor.clone().detach()
+            
+        loss.backward(retain_graph=self.args.DEBUG)
+        if torch.any(torch.isnan(camera_tensor.grad)):
+            logger.debug("Camera tensor is Nan")
+        optimizer.step()         
         optimizer.zero_grad()
         return loss.item()
 
@@ -364,11 +383,12 @@ class Tracker(object):
                     self.visualizer.vis(
                         idx, cam_iter, gt_depth, gt_color, camera_tensor, self.c, self.decoders)
                     
+                    
                     loss = self.optimize_cam_in_batch(
                         camera_tensor, gt_color, gt_depth, self.tracking_pixels, optimizer_camera, imu, idx)
-                    
+                        
                     if torch.any(torch.isnan(camera_tensor)):
-                        print('CAM TENSOR IS NAN')
+                        logger.error(f"Camera Tensor is NAN. Iter {cam_iter}")
                     
                     if cam_iter == 0:
                         initial_loss = loss
