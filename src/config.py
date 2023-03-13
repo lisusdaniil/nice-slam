@@ -21,6 +21,8 @@ def load_config(conf_path, default_path=None):
 
     """
     print('Loading config from', conf_path)
+    if not path.exists(conf_path):
+        conf_path = path.join('/home/dli/nice_slam/nice-slam', conf_path)
     with open(conf_path, 'r') as f:
         cfg_special = yaml.full_load(f)
 

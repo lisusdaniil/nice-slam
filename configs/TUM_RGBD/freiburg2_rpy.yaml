@@ -1,11 +1,15 @@
 inherit_from: configs/TUM_RGBD/tum.yaml
-frame_lims: [370, 470]
-frame_rate: 10
+#frame_lims: [370, 470]
+#frame_rate: 10
+frame_lims: [1300, 1700]
+frame_rate: 100
 verbose: False
 occupancy: False
 mapping:
-  bound: [[-1.5,1.5],[-1.5,1.5],[-1.5, 1.5]]
-  marching_cubes_bound: [[-2.,2.],[-2.,2.],[-2., 2.]]
+  #bound: [[-1.5,1.5],[-1.5,1.5],[-1.5, 1.5]]
+  bound: [[-3.0,3.0],[-3.0,3.0],[-3.0, 3.0]]
+  #marching_cubes_bound: [[-2.,2.],[-2.,2.],[-2., 2.]]
+  marching_cubes_bound: [[-4.,4.],[-4.,4.],[-4., 4.]]
   vis_freq: 10
   vis_inside_freq: 1000
   pixels: 1000

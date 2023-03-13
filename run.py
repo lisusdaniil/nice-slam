@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--dep_u', action='store_true')
     parser.add_argument('--bg_sphr', dest='bg_sphr', action='store_true')
     parser.add_argument('--imu', action='store_true')
+    parser.add_argument('--DEBUG', action='store_true')
     args = parser.parse_args()
 
     cfg = config.load_config(

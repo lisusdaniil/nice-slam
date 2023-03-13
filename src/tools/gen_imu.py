@@ -54,11 +54,40 @@ def gen_imu(cfg, args):
     vel_meas = vel_meas + np.random.multivariate_normal(np.zeros(3), args.vel_noise*np.eye(3), dtset.n_img-1)
     gyro_meas = gyro_meas + np.random.multivariate_normal(np.zeros(3), args.gyro_noise*np.eye(3), dtset.n_img-1)
 
+    # Generate dead reckoned poses using noisy imu data
+    dr_poses = torch.zeros((dtset.n_img, 4, 4))
+    dr_poses[0, :, :] = dtset.poses[0]
+    # Initialize dr error vector
+    dr_err = torch.zeros((dtset.n_img-1, 3))
+    for ii in range(0, dtset.n_img-1):
+        # Get current state
+        c2w_ii = dr_poses[ii]
+        C_ab_ii = SO3.from_matrix(c2w_ii[0:3, 0:3], normalize=True)
+        r_a_ii = c2w_ii[0:3, 3:4]
+
+        # Integrate velocity to get position
+        r_a_jj = r_a_ii + dt_list[ii] * C_ab_ii.dot(vel_meas[ii,:].unsqueeze(0).float()).unsqueeze(1)
+
+        # Integrate angular velocity to get rotation
+        C_ab_jj = C_ab_ii.dot(SO3.exp(dt * gyro_meas[ii,:].unsqueeze(0).float()))
+
+        # Save new pose
+        dr_poses[ii+1, 0:3, 0:3] = C_ab_jj.mat
+        dr_poses[ii+1, 0:3, 3:4] = r_a_jj
+
     # Save all data in imu dict
     imu_data = {'vel': vel_meas, 'gyro': gyro_meas, 'dt': dt_list, 'vel_std': args.vel_noise, 'gyro_std': args.gyro_noise}
 
     # Save imu dict to
     torch.save(imu_data, args.imu_dir + '/imu_data')
+    path = os.path.join(args.imu_dir, 'ckpts/')
+    # Create path if it doesn't exist
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save({
+            'gt_c2w_list': dtset.poses,
+            'estimate_c2w_list': dr_poses,
+            'idx': dtset.n_img-1
+        }, path+'dr.tar', _use_new_zipfile_serialization=False)
 
 def main():
     setup_seed(20)
